@@ -5,7 +5,7 @@
  *      Author: David
  */
 
-#include "Core.h"
+#include "Arduino.h"
 #include "TransactionBuffer.h"
 #include <cstring>
 

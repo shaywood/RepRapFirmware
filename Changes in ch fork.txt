@@ -1,0 +1,11 @@
+This firmware fork is essentially a rebase of dc42's firmware fork (22-06-2016), however the following changes were made:
+
+- Use ArduinoDuet board files instead of CoreNG
+- Custom Makefiles to build everything without Eclipse on UNIX-based operating systems
+
+The following features from my old fork will be merged in soon:
+- G-Code interleaving, meaning that multiple G-codes from different sources can run simultaneously
+- G-Code queuing to execute certain codes like M106 just-in-time and not when they're initially processed by the GCodes class
+
+This firmware fork provides all the functionality from dc42's fork (including G-codes).
+If you are already using RepRapFirmware-dc42, you do not need to change anything to run this firmware.

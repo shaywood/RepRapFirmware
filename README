@@ -138,6 +138,29 @@ Spin() function more than once from RepRap.Spin().
 
 Compiling from Source
 
-See separate file BuildInstructions.txt.
+In order to compile this firmware, you must install the latest Arduino version and my Arduino Duet board files, which are available at https://github.com/chrishamm/ArduinoDuet.
+
+Once done, open a terminal in the "src" directory and run "make all" to compile the firmware.
+
+If you want to build the firmware only for the Duet 0.6 / 0.8.5 only, run "make duet".
+If you want to build the firmware for the DuetWiFi instead, run "make duetng".
+
+To upload the resulting firmware binary via USB, run either
+
+  make upload_duet
+
+or
+
+  make upload_duetng
+
+depending on whether you're using a Duet 0.6 / 0.8.5 or a Duet WiFi.
+
+Be aware that you must install Atmel's SAM-BA application (v2.16) before you can update the firmware via USB, which is available at http://www.atmel.com/tools/atmelsam-bain-systemprogrammer.aspx. Once downloaded, adjust the path to the sam_ba application in the Makefile.
+
+Alternatively you can upload the resulting ".bin" file from the "Release" directory via Duet Web Control on the Settings page. To do so, you will need DuetIAP (i.e. iap.bin / iap4e.bin), which can be obtained from the "Release" directory at https://github.com/chrishamm/DuetIAP.
+
+In order to take advantage of more sophisticated development conditions, a clang configuration file has been included in the "src" directory. It may be used, for example, with vim-clang. If you decide to use it, just don't forget to set your default clang C flags to '-std=gnu11' and your CPP flags to '-std=gnu++11'.
+
+-------------
 
 Licence: GPLv3, see http://www.gnu.org/licenses/gpl-3.0.en.html

@@ -26,7 +26,7 @@ Licence: GPL
 #include <cfloat>
 #include <cstdarg>
 
-#include "Core.h"
+#include "Arduino.h"
 #include "Configuration.h"
 #include "StringRef.h"
 

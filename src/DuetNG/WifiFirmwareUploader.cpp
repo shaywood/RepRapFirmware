@@ -6,7 +6,7 @@
  */
 
 #include "WifiFirmwareUploader.h"
-#include "Core.h"
+#include "Arduino.h"
 #include "RepRapFirmware.h"
 
 // ESP8266 command codes

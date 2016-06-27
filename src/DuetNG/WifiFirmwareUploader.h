@@ -8,7 +8,7 @@
 #ifndef SRC_DUETNG_WIFIFIRMWAREUPLOADER_H_
 #define SRC_DUETNG_WIFIFIRMWAREUPLOADER_H_
 
-#include "Core.h"
+#include "Arduino.h"
 #include "FileStore.h"
 
 class WifiFirmwareUploader

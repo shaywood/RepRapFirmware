@@ -46,7 +46,7 @@ Licence: GPL
 
 // Platform-specific includes
 
-#include "Core.h"
+#include "Arduino.h"
 #include "OutputMemory.h"
 #include "ff.h"
 

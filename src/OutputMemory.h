@@ -8,7 +8,7 @@
 #ifndef OUTPUTMEMORY_H_
 #define OUTPUTMEMORY_H_
 
-#include "Core.h"
+#include "Arduino.h"
 #include "Configuration.h"
 #include "StringRef.h"
 #include "MessageType.h"

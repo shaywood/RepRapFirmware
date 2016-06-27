@@ -46,7 +46,7 @@
 #ifndef KSZ8051RNL_H_INCLUDED
 #define KSZ8051RNL_H_INCLUDED
 
-#include "Core.h"
+#include "Arduino.h"
 #include "emac.h"
 #include "conf_eth.h"
 

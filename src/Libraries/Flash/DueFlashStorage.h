@@ -15,7 +15,7 @@ Further modified up by David Crocker
 #ifndef DUEFLASHSTORAGE_H
 #define DUEFLASHSTORAGE_H
 
-#include "Core.h"
+#include "Arduino.h"
 #include "flash_efc.h"
 
 #ifdef DUET_NG

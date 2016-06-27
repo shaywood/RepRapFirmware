@@ -2,7 +2,7 @@
 #define TEMPERATURESENSOR_H
 
 #include "TemperatureError.h"		// for result codes
-#include "Core.h"
+#include "Arduino.h"
 #include "SharedSpi.h"				// for sspi_device
 
 class TemperatureSensor

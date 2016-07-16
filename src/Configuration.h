@@ -26,7 +26,7 @@ Licence: GPL
 // Firmware name is now defined in the Pins file
 
 #ifndef VERSION
-# define VERSION "1.14-ch"
+# define VERSION "1.15-beta3-ch"
 #endif
 
 #ifndef DATE

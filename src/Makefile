@@ -8,7 +8,7 @@ DATE := 2016-06-27
 
 ARDUINO_VERSION := 1.6.8
 GCC_VERSION := 4.8.3-2014q1
-DUET_BOARD_VERSION := 2.0.1
+DUET_BOARD_VERSION := 2.0.2
 
 # For Duet 0.6 / 0.8.5
 BOSSAC_VERSION := 1.3a-arduino
@@ -33,7 +33,7 @@ endif
 # Detect Duet board path
 DUET_BOARD_PATH := $(ARDUINO_PATH)/packages/RepRap/hardware/sam/$(DUET_BOARD_VERSION)
 ifeq (,$(wildcard $(DUET_BOARD_PATH)/.))
-  $(error Duet board not found! Install it first via Arduino\'s Boards Manager.)
+  $(error Duet board not found! Install it first via the Boards Manager in Arduino IDE.)
 endif
 
 # Detect Duet library path

@@ -24,14 +24,8 @@ Licence: GPL
 #define CONFIGURATION_H
 
 // Firmware name is now defined in the Pins file
-
-#ifndef VERSION
-# define VERSION "1.15-beta3-ch"
-#endif
-
-#ifndef DATE
-# define DATE "2016-07-28"
-#endif
+//
+// VERSION and DATE are now defined in the Makefile
 
 #define AUTHORS "reprappro, dc42, chrishamm, t3p3, dnewman"
 

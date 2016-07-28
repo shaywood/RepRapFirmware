@@ -36,9 +36,9 @@ CPP_OBJS := $(foreach src,$(CPP_SOURCES),$(BUILD_PATH)/$(notdir $(src:.cpp=.cpp.
 DEPS := $(C_OBJS:%.o=%.d) $(CPP_OBJS:%.o=%.d)
 
 # Set GCC options
-CFLAGS := -D__SAM4E8E__ -DDUET_NG -Dprintf=iprintf
+CFLAGS := -DVERSION=\"$(VERSION)\" -DDATE=\"$(DATE)\" -D__SAM4E8E__ -DDUET_NG -Dprintf=iprintf
 CFLAGS += -Wall -c -std=gnu11 -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=softfp -ffunction-sections -fdata-sections -nostdlib --param max-inline-insns-single=500 -MMD -MP
-CPPFLAGS := -D__SAM4E8E__ -DDUET_NG -Dprintf=iprintf
+CPPFLAGS := -DVERSION=\"$(VERSION)\" -DDATE=\"$(DATE)\" -D__SAM4E8E__ -DDUET_NG -Dprintf=iprintf
 CPPFLAGS += -Wall -c -std=gnu++11 -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=softfp -ffunction-sections -fdata-sections -fno-threadsafe-statics -fno-rtti -fno-exceptions -nostdlib --param max-inline-insns-single=500 -MMD -MP
 
 
@@ -48,14 +48,14 @@ LDFLAGS := -L"$(DUET_BOARD_PATH)/variants/duetNG" $(OPTIMISATION) -Wl,--gc-secti
 
 # ================================= Target all ======================================
 .PHONY += all
-all: $(OUTPUT_PATH)/RepRapFirmware-DuetNG.bin
-$(OUTPUT_PATH)/RepRapFirmware-DuetNG.bin: $(OUTPUT_PATH)/RepRapFirmware-DuetNG.elf
-	@echo "  BIN     ../Release/RepRapFirmware-DuetNG.bin"
-	@$(OBJCOPY) -O binary $(OUTPUT_PATH)/RepRapFirmware-DuetNG.elf $(OUTPUT_PATH)/RepRapFirmware-DuetNG.bin
+all: $(OUTPUT_PATH)/RepRapFirmware-DuetNG-$(VERSION).bin
+$(OUTPUT_PATH)/RepRapFirmware-DuetNG-$(VERSION).bin: $(OUTPUT_PATH)/RepRapFirmware-DuetNG-$(VERSION).elf
+	@echo "  BIN     ../Release/RepRapFirmware-DuetNG-$(VERSION).bin"
+	@$(OBJCOPY) -O binary $(OUTPUT_PATH)/RepRapFirmware-DuetNG-$(VERSION).elf $(OUTPUT_PATH)/RepRapFirmware-DuetNG-$(VERSION).bin
 
-$(OUTPUT_PATH)/RepRapFirmware-DuetNG.elf: $(BUILD_PATH) $(OUTPUT_PATH) $(C_OBJS) $(CPP_OBJS)
-	@echo "  LD      ../Release/RepRapFirmware-DuetNG.elf"
-	@$(LD) $(LDFLAGS) -o $(OUTPUT_PATH)/RepRapFirmware-DuetNG.elf
+$(OUTPUT_PATH)/RepRapFirmware-DuetNG-$(VERSION).elf: $(BUILD_PATH) $(OUTPUT_PATH) $(C_OBJS) $(CPP_OBJS)
+	@echo "  LD      ../Release/RepRapFirmware-DuetNG-$(VERSION).elf"
+	@$(LD) $(LDFLAGS) -o $(OUTPUT_PATH)/RepRapFirmware-DuetNG-$(VERSION).elf
 -include $(DEPS)
 
 $(BUILD_PATH)/%.c.o: %.c
@@ -82,7 +82,7 @@ clean:
 
 # ================================= Target upload ===================================
 .PHONY += upload
-upload: $(OUTPUT_PATH)/RepRapFirmware-DuetNG.bin
+upload: $(OUTPUT_PATH)/RepRapFirmware-DuetNG-$(VERSION).bin
 	@echo "=> Rebooting hardware into bootloader mode..."
 	@stty -F $(PRIMARY_PORT) 115200 -ixon crtscts || true
 	@echo -n "M999 PERASE" > $(PRIMARY_PORT) || true

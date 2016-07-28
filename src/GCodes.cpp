@@ -447,7 +447,7 @@ void GCodes::Spin()
 				reprap.GetHeat()->SwitchOffAll();
 			}
 
-			// zpl 2014-18-10: Although RRP says M0 is supposed to turn off all drives and heaters,
+			// chrishamm 2014-18-10: Although RRP says M0 is supposed to turn off all drives and heaters,
 			// I think M1 is sufficient for this purpose. Leave M0 for a normal reset.
 			if (state == GCodeState::sleeping)
 			{
@@ -874,7 +874,7 @@ bool GCodes::LoadMoveBufferFromGCode(GCodeBuffer *gb, bool doingG92, bool applyL
 			}
 
 			// Set the drive values for this tool.
-			// zpl-2014-10-03: Do NOT check extruder temperatures here, because we may be executing queued codes like M116
+			// chrishamm-2014-10-03: Do NOT check extruder temperatures here, because we may be executing queued codes like M116
 			for (size_t eDrive = 0; eDrive < eMoveCount; eDrive++)
 			{
 				int drive = tool->Drive(eDrive);

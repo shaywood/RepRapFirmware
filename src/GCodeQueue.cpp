@@ -21,7 +21,13 @@ GCodeQueue::GCodeQueue() : freeItems(nullptr), queuedItems(nullptr)
 
 bool GCodeQueue::QueueCode(GCodeBuffer *gb)
 {
-	// Check for G-Codes
+	// Don't queue anything if no moves are being performed
+	if (reprap.GetMove()->GetScheduledMoves() == reprap.GetMove()->GetCompletedMoves())
+	{
+		return false;
+	}
+
+	// Check for G-Codes that can be queued
 	bool queueCode = false;
 	if (gb->Seen('G'))
 	{
@@ -30,7 +36,7 @@ bool GCodeQueue::QueueCode(GCodeBuffer *gb)
 		// Set active/standby temperatures
 		queueCode = (code == 10 && gb->Seen('P'));
 	}
-	// Check for M-Codes
+	// Check for M-Codes that can be queued
 	else if (gb->Seen('M'))
 	{
 		const int code = gb->GetIValue();
@@ -77,15 +83,22 @@ bool GCodeQueue::QueueCode(GCodeBuffer *gb)
 		QueuedCode *code = freeItems;
 		freeItems = code->next;
 		code->AssignFrom(gb);
+		code->next = nullptr;
 		
 		// Append it to the list of queued codes
-		QueuedCode *last = queuedItems;
-		while (last->Next() != nullptr)
+		if (queuedItems == nullptr)
 		{
-			last = last->Next();
+			queuedItems = code;
 		}
-		last->next = code;
-		code->next = nullptr;
+		else
+		{
+			QueuedCode *last = queuedItems;
+			while (last->Next() != nullptr)
+			{
+				last = last->Next();
+			}
+			last->next = code;
+		}
 
 		// Overwrite the passed gb's content if we could not store its original code
 		if (!queueCode)
@@ -95,7 +108,9 @@ bool GCodeQueue::QueueCode(GCodeBuffer *gb)
 				gb->Put(codeToQueue[i]);
 
 				if (codeToQueue[i] == 0)
+				{
 					break;
+				}
 			}
 		}
 	}

@@ -20,11 +20,11 @@ INCLUDES += -I"$(DUET_LIBRARY_PATH)/SharedSpi" -I"$(DUET_LIBRARY_PATH)/Storage" 
 
 # Set board options
 INCLUDES += -I"$(PWD)" -I"$(PWD)/Duet" -I"$(PWD)/Duet/EMAC" -I"$(PWD)/Duet/Lwip" -I"$(PWD)/Duet/Lwip/lwip/src/include"
-INCLUDES += -I"$(PWD)/Libraries/Fatfs" -I"$(PWD)/Libraries/Flash" -I"$(PWD)/Libraries/MCP4461" -I"$(PWD)/Libraries/TemperatureSensor"
+INCLUDES += -I"$(PWD)/Libraries/Fatfs" -I"$(PWD)/Libraries/Flash" -I"$(PWD)/Libraries/MCP4461" -I"$(PWD)/Libraries/TemperatureSensor" -I"$(PWD)/Libraries/sha1"
 
 # Get source files
 VPATH := $(PWD) $(PWD)/Duet $(PWD)/Duet/EMAC $(PWD)/Duet/Lwip/contrib/apps/netbios $(PWD)/Duet/Lwip/contrib/apps/mdns $(PWD)/Duet/Lwip/lwip/src/api $(PWD)/Duet/Lwip/lwip/src/core $(PWD)/Duet/Lwip/lwip/src/core/ipv4 $(PWD)/Duet/Lwip/lwip/src/core/snmp $(PWD)/Duet/Lwip/lwip/src/netif $(PWD)/Duet/Lwip/lwip/src/netif/ppp
-VPATH += $(PWD)/Libraries/Fatfs $(PWD)/Libraries/Flash $(PWD)/Libraries/MCP4461 $(PWD)/Libraries/TemperatureSensor # $(PWD)/Libraries/sha1
+VPATH += $(PWD)/Libraries/Fatfs $(PWD)/Libraries/Flash $(PWD)/Libraries/MCP4461 $(PWD)/Libraries/TemperatureSensor $(PWD)/Libraries/sha1
 
 C_SOURCES += $(foreach dir,$(VPATH),$(wildcard $(dir)/*.c)) $(wildcard $(PWD)/*.c)
 CPP_SOURCES := $(foreach dir,$(VPATH),$(wildcard $(dir)/*.cpp)) $(wildcard $(PWD)/*.cpp)

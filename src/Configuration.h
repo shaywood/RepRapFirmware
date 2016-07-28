@@ -26,14 +26,14 @@ Licence: GPL
 // Firmware name is now defined in the Pins file
 
 #ifndef VERSION
-# define VERSION "1.14 beta 1"
+# define VERSION "1.14-ch"
 #endif
 
 #ifndef DATE
-# define DATE "2016-06-27"
+# define DATE "2016-07-12"
 #endif
 
-#define AUTHORS "reprappro, dc42, zpl, t3p3, dnewman"
+#define AUTHORS "reprappro, dc42, chrishamm, t3p3, dnewman"
 
 #define FLASH_SAVE_ENABLED	(1)
 

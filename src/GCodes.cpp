@@ -37,7 +37,8 @@ const char GCodes::axisLetters[AXES] =
 const size_t gcodeReplyLength = 2048;			// long enough to pass back a reasonable number of files in response to M20
 
 GCodes::GCodes(Platform* p, Webserver* w) :
-		platform(p), webserver(w), active(false), stackPointer(0), auxGCodeReply(nullptr), isFlashing(false)
+		platform(p), webserver(w), active(false), stackPointer(0), auxGCodeReply(nullptr), isFlashing(false),
+		fileBeingHashed(nullptr)
 {
 	httpGCode = new GCodeBuffer(platform, "http", HTTP_MESSAGE);
 	telnetGCode = new GCodeBuffer(platform, "telnet", TELNET_MESSAGE);
@@ -45,6 +46,9 @@ GCodes::GCodes(Platform* p, Webserver* w) :
 	serialGCode = new GCodeBuffer(platform, "serial", HOST_MESSAGE);
 	auxGCode = new GCodeBuffer(platform, "aux", AUX_MESSAGE);
 	fileMacroGCode = new GCodeBuffer(platform, "macro", GENERIC_MESSAGE);
+	queuedGCode = new GCodeBuffer(platform, "queue", GENERIC_MESSAGE);
+
+	codeQueue = new GCodeQueue();
 }
 
 void GCodes::Exit()
@@ -139,6 +143,8 @@ void GCodes::Reset()
 	filePos = moveBuffer.filePos = noFilePosition;
 	lastEndstopStates = platform->GetAllEndstopStates();
 	firmwareUpdateModuleMap = 0;
+
+	codeQueue->Clear();
 }
 
 float GCodes::FractionOfFilePrinted() const
@@ -565,6 +571,10 @@ void GCodes::StartNextGCode(StringRef& reply)
 		}
 	}
 	// Check for gcodes that we have already started
+	else if (queuedGCode->IsExecuting())
+	{
+		queuedGCode->SetFinished(ActOnCode(queuedGCode, reply));
+	}
 	else if (httpGCode->IsExecuting())
 	{
 		httpGCode->SetFinished(ActOnCode(httpGCode, reply));
@@ -591,6 +601,10 @@ void GCodes::StartNextGCode(StringRef& reply)
 		// We've handled a trigger, so nothing else to do
 	}
 	// Check for gcodes we can start
+	else if (codeQueue->FillBuffer(queuedGCode))
+	{
+		queuedGCode->SetFinished(ActOnCode(queuedGCode, reply));
+	}
 	else if (httpGCode->IsReady())
 	{
 		httpGCode->SetFinished(ActOnCode(httpGCode, reply));
@@ -2586,24 +2600,28 @@ bool GCodes::ActOnCode(GCodeBuffer *gb, StringRef& reply)
 		return true;
 	}
 
-	gbCurrent = gb;
+	// Can we queue this code?
+	if (gb == queuedGCode || !codeQueue->QueueCode(gb))
+	{
+		gbCurrent = gb;
 
-	// M-code parameters might contain letters T and G, e.g. in filenames.
-	// dc42 assumes that G-and T-code parameters never contain the letter M.
-	// Therefore we must check for an M-code first.
-	if (gb->Seen('M'))
-	{
-		return HandleMcode(gb, reply);
-	}
-	// dc42 doesn't think a G-code parameter ever contains letter T, or a T-code ever contains letter G.
-	// So it doesn't matter in which order we look for them.
-	if (gb->Seen('G'))
-	{
-		return HandleGcode(gb, reply);
-	}
-	if (gb->Seen('T'))
-	{
-		return HandleTcode(gb, reply);
+		// M-code parameters might contain letters T and G, e.g. in filenames.
+		// dc42 assumes that G-and T-code parameters never contain the letter M.
+		// Therefore we must check for an M-code first.
+		if (gb->Seen('M'))
+		{
+			return HandleMcode(gb, reply);
+		}
+		// dc42 doesn't think a G-code parameter ever contains letter T, or a T-code ever contains letter G.
+		// So it doesn't matter in which order we look for them.
+		if (gb->Seen('G'))
+		{
+			return HandleGcode(gb, reply);
+		}
+		if (gb->Seen('T'))
+		{
+			return HandleTcode(gb, reply);
+		}
 	}
 
 	// An invalid or queued buffer gets discarded
@@ -3171,6 +3189,29 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		}
 		break;
 
+	case 38: // Report SHA1 of file
+		if (fileBeingHashed == nullptr)
+		{
+			// See if we can open the file and start hashing
+			const char* filename = gb->GetUnprecedentedString(true);
+			if (StartHash(filename))
+			{
+				// Hashing is now in progress...
+				result = false;
+			}
+			else
+			{
+				error = true;
+				reply.printf("Cannot open file: %s", filename);
+			}
+		}
+		else
+		{
+			// This can take some time. All the actual heavy lifting is in dedicated methods
+			result = AdvanceHash(reply);
+		}
+		break;
+
 	case 42:	// Turn an output pin on or off
 		if (gb->Seen('P'))
 		{
@@ -3181,7 +3222,8 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 				bool success = platform->SetPin(pin, val);
 				if (!success)
 				{
-					platform->MessageF(GENERIC_MESSAGE, "Setting pin %d to %d is not supported\n", pin, val);
+					error = true;
+					reply.printf("Setting pin %d to %d is not supported", pin, val);
 				}
 			}
 		}
@@ -5592,6 +5634,55 @@ void GCodes::ListTriggers(StringRef reply, TriggerMask mask)
 			}
 		}
 	}
+}
+
+// M38 (SHA1 hash of a file) implementation:
+bool GCodes::StartHash(const char* filename)
+{
+	// Get a FileStore object
+	fileBeingHashed = platform->GetFileStore(FS_PREFIX, filename, false);
+	if (fileBeingHashed == nullptr)
+	{
+		return false;
+	}
+
+	// Start hashing
+	SHA1Reset(&hash);
+	return true;
+}
+
+bool GCodes::AdvanceHash(StringRef &reply)
+{
+	// Read and process some more data from the file
+	uint32_t buf32[(FILE_BUFFER_SIZE + 3) / 4];
+	char *buffer = reinterpret_cast<char *>(buf32);
+
+	int bytesRead = fileBeingHashed->Read(buffer, FILE_BUFFER_SIZE);
+	if (bytesRead != -1)
+	{
+		SHA1Input(&hash, reinterpret_cast<const uint8_t *>(buffer), bytesRead);
+
+		if (bytesRead != FILE_BUFFER_SIZE)
+		{
+			// Calculate and report the final result
+			SHA1Result(&hash);
+			for(size_t i = 0; i < 5; i++)
+			{
+				reply.catf("%x", hash.Message_Digest[i]);
+			}
+
+			// Clean up again
+			fileBeingHashed->Close();
+			fileBeingHashed = nullptr;
+			return true;
+		}
+		return false;
+	}
+
+	// Something went wrong, we cannot read any more from the file
+	fileBeingHashed->Close();
+	fileBeingHashed = nullptr;
+	return true;
 }
 
 // End

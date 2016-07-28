@@ -84,7 +84,7 @@ void Network::ClearIpAddress()
 // GPIO0	GPIO2	GPIO15
 // 0		1		0		Firmware download from UART
 // 1		1		0		Normal boot from flash memory
-// 0		0		1		SD card boot (not used in on Duet)
+// 0		0		1		SD card boot (not used on Duet)
 void Network::Start()
 {
 	// The ESP8266 is held in a reset state by a pulldown resistor until we enable it.

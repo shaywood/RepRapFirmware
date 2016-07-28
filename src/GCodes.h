@@ -23,6 +23,9 @@ Licence: GPL
 #define GCODES_H
 
 #include "GCodeBuffer.h"
+#include "GCodeQueue.h"
+
+#include "sha1.h"
 
 const unsigned int StackSize = 5;
 
@@ -213,7 +216,8 @@ private:
     GCodeBuffer* serialGCode;					// ...
     GCodeBuffer* auxGCode;						// this one is for the LCD display on the async serial interface
     GCodeBuffer* fileMacroGCode;				// ...
-    GCodeBuffer *gbCurrent;
+	GCodeBuffer* queuedGCode;					// ...
+    GCodeBuffer* gbCurrent;
     bool active;								// Live and running?
     bool isPaused;								// true if the print has been paused
     bool dwellWaiting;							// We are in a dwell
@@ -280,6 +284,15 @@ private:
     // Firmware update
     uint8_t firmwareUpdateModuleMap;			// Bitmap of firmware modules to be updated
 	bool isFlashing;							// Is a new firmware binary going to be flashed?
+
+	// Code queue
+	GCodeQueue *codeQueue;						// Stores certain codes for deferred execution
+
+	// SHA1 hashing
+	FileStore *fileBeingHashed;
+	SHA1Context hash;
+	bool StartHash(const char* filename);
+	bool AdvanceHash(StringRef &reply);
 };
 
 //*****************************************************************************************************

@@ -23,8 +23,8 @@ PrintMonitor::PrintMonitor(Platform *p, GCodes *gc) : platform(p), gCodes(gc), i
 	printStartTime(0), pauseStartTime(0.0), totalPauseTime(0.0), heatingUp(false), currentLayer(0), warmUpDuration(0.0),
 	firstLayerDuration(0.0), firstLayerFilament(0.0), firstLayerProgress(0.0), lastLayerChangeTime(0.0),
 	lastLayerFilament(0.0), lastLayerZ(0.0), numLayerSamples(0), layerEstimatedTimeLeft(0.0), parseState(notParsing),
-	fileBeingParsed(nullptr), fileOverlapLength(0), printingFileParsed(false), accumulatedParseTime(0),
-	accumulatedReadTime(0), accumulatedSeekTime(0)
+	fileBeingParsed(nullptr), fileOverlapLength(0), printingFileParsed(false), accumulatedParseTime(0.0),
+	accumulatedReadTime(0.0)
 {
 	filenameBeingPrinted[0] = 0;
 }
@@ -98,7 +98,7 @@ void PrintMonitor::Spin()
 				}
 			}
 
-			// Yes - do we have live movement?
+			// Yes - do we have live momement?
 			if (nozzleAtHighTemperature && !reprap.GetMove()->NoLiveMovement())
 			{
 				// Yes - we're actually starting the print
@@ -182,7 +182,7 @@ void PrintMonitor::WarmUpComplete()
 // Called when the first layer has been finished
 void PrintMonitor::FirstLayerComplete()
 {
-	firstLayerFilament = RawFilamentExtruded();
+	firstLayerFilament = gCodes->GetTotalRawExtrusion();
 	firstLayerDuration = GetPrintDuration() - warmUpDuration;
 	firstLayerProgress = gCodes->FractionOfFilePrinted();
 
@@ -199,7 +199,7 @@ void PrintMonitor::FirstLayerComplete()
 void PrintMonitor::LayerComplete()
 {
 	// Record a new set of layer, filament and file stats
-	const float extrRawTotal = RawFilamentExtruded();
+	const float extrRawTotal = gCodes->GetTotalRawExtrusion();
 	if (numLayerSamples < MAX_LAYER_SAMPLES)
 	{
 		if (numLayerSamples == 0)
@@ -271,16 +271,25 @@ void PrintMonitor::StoppedPrint()
 
 bool PrintMonitor::GetFileInfo(const char *directory, const char *fileName, GCodeFileInfo& info)
 {
-	if (parseState == notParsing)
+	// Webserver may call rr_fileinfo for a directory, check this case here
+	if (reprap.GetPlatform()->GetMassStorage()->DirectoryExists(directory, fileName))
 	{
-		// See if we can access the file
-		// Webserver may call rr_fileinfo for a directory, check this case here
-		if (reprap.GetPlatform()->GetMassStorage()->DirectoryExists(directory, fileName))
-		{
-			info.isValid = false;
-			return true;
-		}
+		info.isValid = false;
+		return true;
+	}
 
+	// Are we still parsing a file?
+	if (parseState != notParsing)
+	{
+		if (!StringEquals(fileName, filenameBeingParsed))
+		{
+			// Yes - but it's not the file we're processing. Try again later
+			return false;
+		}
+	}
+	else if (parseState == notParsing)
+	{
+		// No - see if we can access the file
 		fileBeingParsed = platform->GetFileStore(directory, fileName, false);
 		if (fileBeingParsed == nullptr)
 		{
@@ -310,11 +319,11 @@ bool PrintMonitor::GetFileInfo(const char *directory, const char *fileName, GCod
 		// Record some debug values here
 		if (reprap.Debug(modulePrintMonitor))
 		{
-			accumulatedReadTime = accumulatedParseTime = 0;
+			accumulatedReadTime = accumulatedParseTime = 0.0;
 			platform->MessageF(HOST_MESSAGE, "-- Parsing file %s --\n", fileName);
 		}
 
-		// If the file is empty or not a G-Code file, we don't need to parse anything
+		// If the file is empty or no G-Code file, we don't need to parse anything
 		if (fileBeingParsed->Length() == 0 || (!StringEndsWith(fileName, ".gcode") && !StringEndsWith(fileName, ".g")
 					&& !StringEndsWith(fileName, ".gco") && !StringEndsWith(fileName, ".gc")))
 		{
@@ -324,261 +333,256 @@ bool PrintMonitor::GetFileInfo(const char *directory, const char *fileName, GCod
 		}
 		parseState = parsingHeader;
 	}
-	else if (!StringEquals(fileName, filenameBeingParsed))
-	{
-		// We are already parsing a different file. Try again later.
-		return false;
-	}
 
-	// Getting file information take a few runs. Speed it up when we are not printing by calling it several times.
-	const uint32_t loopStartTime = millis();
-	do
-	{
-		uint32_t buf32[(GCODE_READ_SIZE + GCODE_OVERLAP_SIZE + 3)/4 + 1];	// buffer should be 32-bit aligned for HSMCI (need the +1 so we can add a null terminator)
-		char* const buf = reinterpret_cast<char*>(buf32);
-		size_t sizeToRead, sizeToScan;										// number of bytes we want to read and scan in this go
+	// First try to process the header of the file
+	float startTime = platform->Time();
+	uint32_t buf32[(GCODE_READ_SIZE + GCODE_OVERLAP_SIZE + 3)/4 + 1];	// buffer should be 32-bit aligned for HSMCI (need the +1 so we can add a null terminator)
+	char* const buf = reinterpret_cast<char*>(buf32);
+	size_t sizeToRead, sizeToScan;										// number of bytes we want to read and scan in this go
 
-		if (parseState == parsingHeader)
+	if (parseState == parsingHeader)
+	{
+		bool headerInfoComplete = true;
+
+		// Read a chunk from the header. On the first run only process 1024 bytes, but use overlap (total 1124 bytes) next times.
+		sizeToRead = (size_t)min<FilePosition>(fileBeingParsed->Length() - fileBeingParsed->Position(), GCODE_READ_SIZE);
+		if (fileOverlapLength > 0)
 		{
-			bool headerInfoComplete = true;
+			memcpy(buf, fileOverlap, fileOverlapLength);
+			sizeToScan = sizeToRead + fileOverlapLength;
+		}
+		else
+		{
+			sizeToScan = sizeToRead;
+		}
 
-			// Read a chunk from the header. On the first run only process GCODE_READ_SIZE bytes, but use overlap next times.
-			sizeToRead = (size_t)min<FilePosition>(fileBeingParsed->Length() - fileBeingParsed->Position(), GCODE_READ_SIZE);
-			if (fileOverlapLength > 0)
-			{
-				memcpy(buf, fileOverlap, fileOverlapLength);
-				sizeToScan = sizeToRead + fileOverlapLength;
-			}
-			else
-			{
-				sizeToScan = sizeToRead;
-			}
+		int nbytes = fileBeingParsed->Read(&buf[fileOverlapLength], sizeToRead);
+		if (nbytes != (int)sizeToRead)
+		{
+			platform->MessageF(HOST_MESSAGE, "Error: Failed to read header of G-Code file \"%s\"\n", fileName);
+			parseState = notParsing;
+			fileBeingParsed->Close();
+			info = parsedFileInfo;
+			return true;
+		}
+		buf[sizeToScan] = 0;
 
-			uint32_t startTime = millis();
-			int nbytes = fileBeingParsed->Read(&buf[fileOverlapLength], sizeToRead);
-			if (nbytes != (int)sizeToRead)
-			{
-				platform->MessageF(HOST_MESSAGE, "Error: Failed to read header of G-Code file \"%s\"\n", fileName);
-				parseState = notParsing;
-				fileBeingParsed->Close();
-				info = parsedFileInfo;
-				return true;
-			}
-			buf[sizeToScan] = 0;
-
-			// Record performance data
-			uint32_t now = millis();
+		// Record performance data
+		if (reprap.Debug(modulePrintMonitor))
+		{
+			const float now = platform->Time();
 			accumulatedReadTime += now - startTime;
 			startTime = now;
+		}
 
-			// Search for filament usage (Cura puts it at the beginning of a G-code file)
-			if (parsedFileInfo.numFilaments == 0)
-			{
-				parsedFileInfo.numFilaments = FindFilamentUsed(buf, sizeToScan, parsedFileInfo.filamentNeeded, DRIVES - AXES);
-				headerInfoComplete &= (parsedFileInfo.numFilaments != 0);
-			}
+		// Search for filament usage (Cura puts it at the beginning of a G-code file)
+		if (parsedFileInfo.numFilaments == 0)
+		{
+			parsedFileInfo.numFilaments = FindFilamentUsed(buf, sizeToScan, parsedFileInfo.filamentNeeded, DRIVES - AXES);
+			headerInfoComplete &= (parsedFileInfo.numFilaments != 0);
+		}
 
-			// Look for first layer height
-			if (parsedFileInfo.firstLayerHeight == 0.0)
-			{
-				headerInfoComplete &= FindFirstLayerHeight(buf, sizeToScan, parsedFileInfo.firstLayerHeight);
-			}
+		// Look for first layer height
+		if (parsedFileInfo.firstLayerHeight == 0.0)
+		{
+			headerInfoComplete &= FindFirstLayerHeight(buf, sizeToScan, parsedFileInfo.firstLayerHeight);
+		}
 
-			// Look for layer height
-			if (parsedFileInfo.layerHeight == 0.0)
-			{
-				headerInfoComplete &= FindLayerHeight(buf, sizeToScan, parsedFileInfo.layerHeight);
-			}
+		// Look for layer height
+		if (parsedFileInfo.layerHeight == 0.0)
+		{
+			headerInfoComplete &= FindLayerHeight(buf, sizeToScan, parsedFileInfo.layerHeight);
+		}
 
-			// Look for slicer program
-			if (parsedFileInfo.generatedBy[0] == 0)
+		// Look for slicer program
+		if (parsedFileInfo.generatedBy[0] == 0)
+		{
+			// Slic3r and S3D
+			const char* generatedByString = "generated by ";
+			char* pos = strstr(buf, generatedByString);
+			if (pos != nullptr)
 			{
-				// Slic3r and S3D
-				const char* generatedByString = "generated by ";
-				char* pos = strstr(buf, generatedByString);
-				if (pos != nullptr)
+				pos += strlen(generatedByString);
+				size_t i = 0;
+				while (i < ARRAY_SIZE(parsedFileInfo.generatedBy) - 1 && *pos >= ' ')
 				{
-					pos += strlen(generatedByString);
-					size_t i = 0;
-					while (i < ARRAY_SIZE(parsedFileInfo.generatedBy) - 1 && *pos >= ' ')
+					char c = *pos++;
+					if (c == '"' || c == '\\')
 					{
-						char c = *pos++;
-						if (c == '"' || c == '\\')
-						{
-							// Need to escape the quote-mark for JSON
-							if (i > ARRAY_SIZE(parsedFileInfo.generatedBy) - 3)
-							{
-								break;
-							}
-							parsedFileInfo.generatedBy[i++] = '\\';
-						}
-						parsedFileInfo.generatedBy[i++] = c;
-					}
-					parsedFileInfo.generatedBy[i] = 0;
-				}
-
-				// Cura
-				const char* slicedAtString = ";Sliced at: ";
-				pos = strstr(buf, slicedAtString);
-				if (pos != nullptr)
-				{
-					pos += strlen(slicedAtString);
-					strcpy(parsedFileInfo.generatedBy, "Cura at ");
-					size_t i = 8;
-					while (i < ARRAY_SIZE(parsedFileInfo.generatedBy) - 1 && *pos >= ' ')
-					{
-						char c = *pos++;
-						if (c == '"' || c == '\\')
-						{
-							if (i > ARRAY_SIZE(parsedFileInfo.generatedBy) - 3)
-							{
-								break;
-							}
-							parsedFileInfo.generatedBy[i++] = '\\';
-						}
-						parsedFileInfo.generatedBy[i++] = c;
-					}
-					parsedFileInfo.generatedBy[i] = 0;
-				}
-
-				// KISSlicer
-				const char* kisslicerStart = "; KISSlicer";
-				if (StringStartsWith(buf, kisslicerStart))
-				{
-					size_t stringLength = 0;
-					for(size_t i = 2; i < ARRAY_UPB(parsedFileInfo.generatedBy); i++)
-					{
-						if (buf[i] == '\r' || buf[i] == '\n')
+						// Need to escape the quote-mark for JSON
+						if (i > ARRAY_SIZE(parsedFileInfo.generatedBy) - 3)
 						{
 							break;
 						}
-
-						parsedFileInfo.generatedBy[stringLength++] = buf[i];
+						parsedFileInfo.generatedBy[i++] = '\\';
 					}
-					parsedFileInfo.generatedBy[stringLength] = 0;
+					parsedFileInfo.generatedBy[i++] = c;
 				}
+				parsedFileInfo.generatedBy[i] = 0;
 			}
-			headerInfoComplete &= (parsedFileInfo.generatedBy[0] != 0);
 
-			// Keep track of the time stats
-			accumulatedParseTime += millis() - startTime;
-
-			// Can we proceed to the footer? Don't scan more than the first 4KB of the file
-			FilePosition pos = fileBeingParsed->Position();
-			if (headerInfoComplete || pos >= GCODE_HEADER_SIZE || pos == fileBeingParsed->Length())
+			// Cura
+			const char* slicedAtString = ";Sliced at: ";
+			pos = strstr(buf, slicedAtString);
+			if (pos != nullptr)
 			{
-				// Yes - see if we need to output some debug info
-				if (reprap.Debug(modulePrintMonitor))
+				pos += strlen(slicedAtString);
+				strcpy(parsedFileInfo.generatedBy, "Cura at ");
+				size_t i = 8;
+				while (i < ARRAY_SIZE(parsedFileInfo.generatedBy) - 1 && *pos >= ' ')
 				{
-					platform->MessageF(HOST_MESSAGE, "Header complete, processed %lu bytes, read time %.3fs, parse time %.3fs\n",
-										fileBeingParsed->Position(), (float)accumulatedReadTime/1000.0, (float)accumulatedParseTime/1000.0);
+					char c = *pos++;
+					if (c == '"' || c == '\\')
+					{
+						if (i > ARRAY_SIZE(parsedFileInfo.generatedBy) - 3)
+						{
+							break;
+						}
+						parsedFileInfo.generatedBy[i++] = '\\';
+					}
+					parsedFileInfo.generatedBy[i++] = c;
 				}
-
-				// Go to the last chunk and proceed from there on
-				startTime = millis();
-				const FilePosition seekFromEnd = ((fileBeingParsed->Length() - 1) % GCODE_READ_SIZE) + 1;
-				fileBeingParsed->Seek(fileBeingParsed->Length() - seekFromEnd);
-				accumulatedSeekTime = millis() - startTime;
-				accumulatedReadTime = accumulatedParseTime = 0;
-				fileOverlapLength = 0;
-				parseState = parsingFooter;
+				parsedFileInfo.generatedBy[i] = 0;
 			}
-			else
+
+			// KISSlicer
+			const char* kisslicerStart = "; KISSlicer";
+			if (StringStartsWith(buf, kisslicerStart))
 			{
-				// No - copy the last chunk of the buffer for overlapping search
-				fileOverlapLength = min<size_t>(sizeToRead, GCODE_OVERLAP_SIZE);
-				memcpy(fileOverlap, &buf[sizeToRead - fileOverlapLength], fileOverlapLength);
+				size_t stringLength = 0;
+				for(size_t i = 2; i < ARRAY_UPB(parsedFileInfo.generatedBy); i++)
+				{
+					if (buf[i] == '\r' || buf[i] == '\n')
+					{
+						break;
+					}
+
+					parsedFileInfo.generatedBy[stringLength++] = buf[i];
+				}
+				parsedFileInfo.generatedBy[stringLength] = 0;
 			}
 		}
+		headerInfoComplete &= (parsedFileInfo.generatedBy[0] != 0);
 
-		if (parseState == parsingFooter)
+		// Keep track of the time stats
+		if (reprap.Debug(modulePrintMonitor))
 		{
-			// Processing the footer. See how many bytes we need to read and if we can reuse the overlap
-			bool footerInfoComplete = true;
-			FilePosition pos = fileBeingParsed->Position();
-			sizeToRead = (size_t)min<FilePosition>(fileBeingParsed->Length() - pos, GCODE_READ_SIZE);
-			if (fileOverlapLength > 0)
-			{
-				memcpy(&buf[sizeToRead], fileOverlap, fileOverlapLength);
-				sizeToScan = sizeToRead + fileOverlapLength;
-			}
-			else
-			{
-				sizeToScan = sizeToRead;
-			}
-
-			// Read another chunk from the footer
-			uint32_t startTime = millis();
-			int nbytes = fileBeingParsed->Read(buf, sizeToRead);
-			if (nbytes != (int)sizeToRead)
-			{
-				platform->MessageF(HOST_MESSAGE, "Error: Failed to read footer from G-Code file \"%s\"\n", fileName);
-				parseState = notParsing;
-				fileBeingParsed->Close();
-				info = parsedFileInfo;
-				return true;
-			}
-			buf[sizeToScan] = 0;
-
-			// Record performance data
-			uint32_t now = millis();
-			accumulatedReadTime += now - startTime;
-			startTime = now;
-
-			// Search for filament used
-			if (parsedFileInfo.numFilaments == 0)
-			{
-				parsedFileInfo.numFilaments = FindFilamentUsed(buf, sizeToScan, parsedFileInfo.filamentNeeded, DRIVES - AXES);
-				footerInfoComplete &= (parsedFileInfo.numFilaments != 0);
-			}
-
-			// Search for layer height
-			if (parsedFileInfo.layerHeight == 0.0)
-			{
-				footerInfoComplete &= FindLayerHeight(buf, sizeToScan, parsedFileInfo.layerHeight);
-			}
-
-			// Search for object height
-			if (parsedFileInfo.objectHeight == 0.0)
-			{
-				footerInfoComplete &= FindHeight(buf, sizeToScan, parsedFileInfo.objectHeight);
-			}
-
-			// Keep track of the time stats
-			accumulatedParseTime += millis() - startTime;
-
-			// If we've collected all details, scanned the last 192K of the file or if we cannot go any further, stop here.
-			if (footerInfoComplete || pos == 0 || fileBeingParsed->Length() - pos >= GCODE_FOOTER_SIZE)
-			{
-				if (reprap.Debug(modulePrintMonitor))
-				{
-					platform->MessageF(HOST_MESSAGE, "Footer complete, processed %lu bytes, read time %.3fs, parse time %.3fs, seek time %.3fs\n",
-										fileBeingParsed->Length() - fileBeingParsed->Position() + GCODE_READ_SIZE,
-										(float)accumulatedReadTime/1000.0, (float)accumulatedParseTime/1000.0, (float)accumulatedSeekTime/1000.0);
-				}
-				parseState = notParsing;
-				fileBeingParsed->Close();
-				info = parsedFileInfo;
-				return true;
-			}
-
-			// Else go back further
-			startTime = millis();
-			size_t seekOffset = (size_t)min<FilePosition>(pos, GCODE_READ_SIZE);
-			if (!fileBeingParsed->Seek(pos - seekOffset))
-			{
-				platform->Message(HOST_MESSAGE, "Error: Could not seek from end of file!\n");
-				parseState = notParsing;
-				fileBeingParsed->Close();
-				info = parsedFileInfo;
-				return true;
-			}
-			accumulatedSeekTime += millis() - startTime;
-
-			fileOverlapLength = (size_t)min<FilePosition>(sizeToScan, GCODE_OVERLAP_SIZE);
-			memcpy(fileOverlap, buf, fileOverlapLength);
+			accumulatedParseTime += platform->Time() - startTime;
 		}
-	} while (!isPrinting && millis() - loopStartTime < MAX_FILEINFO_PROCESS_TIME);
+
+		// Can we proceed to the footer? Don't scan more than the first 4KB of the file
+		FilePosition pos = fileBeingParsed->Position();
+		if (headerInfoComplete || pos >= GCODE_HEADER_SIZE || pos == fileBeingParsed->Length())
+		{
+			// Yes - see if we need to output some debug info
+			if (reprap.Debug(modulePrintMonitor))
+			{
+				platform->MessageF(HOST_MESSAGE, "Header complete, processed %lu bytes total\n", fileBeingParsed->Position());
+				platform->MessageF(HOST_MESSAGE, "Accumulated file read time: %fs, accumulated parsing time: %fs\n", accumulatedReadTime, accumulatedParseTime);
+				accumulatedReadTime = accumulatedParseTime = 0.0;
+			}
+
+			// Go to the last sector and proceed from there on
+			const FilePosition seekFromEnd = (fileBeingParsed->Length() - 1) % GCODE_READ_SIZE + 1;
+			fileBeingParsed->Seek(fileBeingParsed->Length() - seekFromEnd);
+			fileOverlapLength = 0;
+			parseState = parsingFooter;
+		}
+		else
+		{
+			// No - copy the last chunk of the buffer for overlapping search
+			fileOverlapLength = min<size_t>(sizeToRead, GCODE_OVERLAP_SIZE);
+			memcpy(fileOverlap, &buf[sizeToRead - fileOverlapLength], fileOverlapLength);
+		}
+		return false;
+	}
+
+	// Processing the footer. See how many bytes we need to read and if we can reuse the overlap
+	bool footerInfoComplete = true;
+	FilePosition pos = fileBeingParsed->Position();
+	sizeToRead = (size_t)min<FilePosition>(fileBeingParsed->Length() - pos, GCODE_READ_SIZE);
+	if (fileOverlapLength > 0)
+	{
+		memcpy(&buf[sizeToRead], fileOverlap, fileOverlapLength);
+		sizeToScan = sizeToRead + fileOverlapLength;
+	}
+	else
+	{
+		sizeToScan = sizeToRead;
+	}
+
+	// Read another chunk from the footer
+	int nbytes = fileBeingParsed->Read(buf, sizeToRead);
+	if (nbytes != (int)sizeToRead)
+	{
+		platform->MessageF(HOST_MESSAGE, "Error: Failed to read footer from G-Code file \"%s\"\n", fileName);
+		parseState = notParsing;
+		fileBeingParsed->Close();
+		info = parsedFileInfo;
+		return true;
+	}
+	buf[sizeToScan] = 0;
+
+	// Record performance data
+	if (reprap.Debug(modulePrintMonitor))
+	{
+		const float now = platform->Time();
+		accumulatedReadTime += now - startTime;
+		startTime = now;
+	}
+
+	// Search for filament used
+	if (parsedFileInfo.numFilaments == 0)
+	{
+		parsedFileInfo.numFilaments = FindFilamentUsed(buf, sizeToScan, parsedFileInfo.filamentNeeded, DRIVES - AXES);
+		footerInfoComplete &= (parsedFileInfo.numFilaments != 0);
+	}
+
+	// Search for layer height
+	if (parsedFileInfo.layerHeight == 0.0)
+	{
+		footerInfoComplete &= FindLayerHeight(buf, sizeToScan, parsedFileInfo.layerHeight);
+	}
+
+	// Search for object height
+	if (parsedFileInfo.objectHeight == 0.0)
+	{
+		footerInfoComplete &= FindHeight(buf, sizeToScan, parsedFileInfo.objectHeight);
+	}
+
+	// Keep track of the time stats
+	if (reprap.Debug(modulePrintMonitor))
+	{
+		accumulatedParseTime += platform->Time() - startTime;
+	}
+
+	// If we've collected all details, scanned the last 128K of the file or if we cannot go any further, stop here.
+	if (footerInfoComplete || pos == 0 || fileBeingParsed->Length() - pos >= GCODE_FOOTER_SIZE)
+	{
+		if (reprap.Debug(modulePrintMonitor))
+		{
+			platform->MessageF(GENERIC_MESSAGE, "Footer complete, processed %lu bytes total\n", fileBeingParsed->Length() - fileBeingParsed->Position() + GCODE_READ_SIZE);
+			platform->MessageF(GENERIC_MESSAGE, "Accumulated file read time: %fs, accumulated parsing time: %fs\n", accumulatedReadTime, accumulatedParseTime);
+		}
+		parseState = notParsing;
+		fileBeingParsed->Close();
+		info = parsedFileInfo;
+		return true;
+	}
+
+	// Else go back further
+	size_t seekOffset = (size_t)min<FilePosition>(pos, GCODE_READ_SIZE);
+	if (!fileBeingParsed->Seek(pos - seekOffset))
+	{
+		platform->Message(HOST_MESSAGE, "Error: Could not seek from end of file!\n");
+		parseState = notParsing;
+		fileBeingParsed->Close();
+		info = parsedFileInfo;
+		return true;
+	}
+
+	fileOverlapLength = (size_t)min<FilePosition>(sizeToScan, GCODE_OVERLAP_SIZE);
+	memcpy(fileOverlap, buf, fileOverlapLength);
 	return false;
 }
 
@@ -591,6 +595,7 @@ bool PrintMonitor::GetFileInfoResponse(const char *filename, OutputBuffer *&resp
 		GCodeFileInfo info;
 		if (!GetFileInfo(FS_PREFIX, filename, info))
 		{
+			// This may take a few runs...
 			return false;
 		}
 
@@ -756,7 +761,7 @@ float PrintMonitor::EstimateTimeLeft(PrintEstimationMethod method) const
 #if SUPPORT_ROLAND
 					|| reprap.GetRoland()->Active()
 #endif
-				)
+					)
 			{
 				return 0.0;
 			}
@@ -885,112 +890,112 @@ bool PrintMonitor::FindFirstLayerHeight(const char* buf, size_t len, float& heig
 	return foundHeight;
 }
 
-// Get the sum of extruded filament (in mm)
-float PrintMonitor::RawFilamentExtruded() const
-{
-	return reprap.GetGCodes()->GetTotalRawExtrusion();
-}
-
-// Scan the buffer for a G1 Zxxx command. The buffer is null-terminated.
-// This parsing algorithm needs to be fast. The old one sometimes took 5 seconds or more to parse about 120K of data.
-// To speed up parsing, we now parse forwards from the start of the buffer. This means we can't stop when we have found a G1 Z command,
-// we have to look for a later G1 Z command in the buffer. But it is faster in the (common) case that we don't find a match in the buffer at all.
+// Scan the buffer in reverse for a G1 Zxxx command. The buffer is null-terminated.
 bool PrintMonitor::FindHeight(const char* buf, size_t len, float& height) const
 {
-	bool foundHeight = false;
-	bool inRelativeMode = false;
-	for(;;)
+	if (len < 5)
 	{
-		// Skip to next newline
-		char c;
-		while (len >= 6 && (c = *buf) != '\r' && c != '\n')
+		// Don't start if the buffer is not big enough
+		return false;
+	}
+
+//debugPrintf("Scanning %u bytes starting %.100s\n", len, buf);
+	bool inComment, inRelativeMode = false;
+	unsigned int zPos;
+	for(size_t i = len - 5; i > 0; i--)
+	{
+		if (inRelativeMode)
 		{
-			++buf;
-			--len;
+			inRelativeMode = !(buf[i] == 'G' && buf[i + 1] == '9' && buf[i + 2] == '1' && buf[i + 3] <= ' ');
 		}
-
-		// Skip the newline and any leading spaces
-		do
+		else if (buf[i] == 'G')
 		{
-			++buf;			// skip the newline
-			--len;
-			c = *buf;
-		} while (len >= 5 && (c == ' ' || c == '\t' || c == '\r' || c == '\n'));
-
-		if (len < 5)
-		{
-			break;
-		}
-
-		++buf;			// move to 1 character beyond c
-		--len;
-
-		if (c == 'G')
-		{
-			if (inRelativeMode)
+			// Ignore G0/G1 codes if absolute mode was switched back using G90 (typical for Cura files)
+			if (buf[i + 1] == '9' && buf[i + 2] == '0' && buf[i + 3] <= ' ')
 			{
-				if (buf[0] == '9' && buf[1] == '0' && (buf[2] < '0' || buf[2] > '9'))
-				{
-					// It's a G90 command so go back to absolute mode
-					inRelativeMode = false;
-				}
+				inRelativeMode = true;
 			}
-			else if (*buf == '1' || *buf == '0')
+			// Look for last "G0/G1 ... Z#HEIGHT#" command as generated by common slicers
+			else if ((buf[i + 1] == '0' || buf[i + 1] == '1') && buf[i + 2] == ' ')
 			{
-				// It could be a G0 or G1 command
-				++buf;
-				--len;
-				if (*buf < '0' || *buf > '9')
+				// Looks like we found a controlled move, however it could be in a comment, especially when using slic3r 1.1.1
+				inComment = false;
+				size_t j = i;
+				while (j != 0)
 				{
-					// It is a G0 or G1 command. See if it has a Z parameter.
-					while (len >= 4)
+					--j;
+					char c = buf[j];
+					if (c == '\n' || c == '\r')
 					{
-						c = *buf++;
-						--len;
-						if (c == 'Z')
+						// It's not in a comment
+						break;
+					}
+					if (c == ';')
+					{
+						// It is in a comment, so give up on this one
+						inComment = true;
+						break;
+					}
+				}
+				if (inComment)
+					continue;
+
+				// Find 'Z' position and grab that value
+				zPos = 0;
+				for(size_t j = i + 3; j < len - 2; j++)
+				{
+					char c = buf[j];
+					if (c == ';')
+					{
+						inComment = true;
+					}
+					else if (c == 'Z' && !inComment)
+					{
+						zPos = j;
+					}
+					else if (c == '\n')
+					{
+						if (zPos != 0)
 						{
-							const char* zpos = buf;
 							// Check special case of this code ending with ";E" or "; E" - ignore such codes
-							while (len > 2 && *buf != '\n' && *buf != '\r' && *buf != ';')
+							for(j = zPos + 1; j < len - 3; j++)
 							{
-								++buf;
-								--len;
+								c = buf[j];
+								if (c == ';' && (buf[j + 1] == 'E' || buf[j + 2] == 'E'))
+								{
+									zPos = 0;
+									break;
+								}
+								if (c == '\n')
+								{
+									break;
+								}
 							}
-							if ((len >= 2 && StringStartsWith(buf, ";E")) || (len >= 3 && StringStartsWith(buf, "; E")))
+
+							if (zPos != 0)
 							{
-								// Ignore this G1 Z command
+								// Z position is valid - read it
+								height = strtod(&buf[zPos + 1], nullptr);
+								return true;
 							}
-							else
-							{
-								height = strtod(zpos, nullptr);
-								foundHeight = true;
-							}
-							break;		// carry on looking for a later G1 Z command
 						}
-						if (c == ';' || c == '\n' || c == '\r')
-						{
-							break;		// no Z parameter
-						}
+						break;
 					}
 				}
 			}
-			else if (buf[0] == '9' && buf[1] == '1' && (buf[2] < '0' || buf[2] > '9'))
-			{
-				// It's a G91 command
-				inRelativeMode = true;
-			}
 		}
-		else if (c == ';')
+		// Special case: KISSlicer generates object height as a comment
+		else
 		{
-			static const char kisslicerHeightString[] = " END_LAYER_OBJECT z=";
-			if (len > 31 && StringStartsWith(buf, kisslicerHeightString))
+			const char *kisslicerHeightString = "; END_LAYER_OBJECT z=";
+			if (i + 32 < len && StringStartsWith(buf + i, kisslicerHeightString))
 			{
-				height = strtod(buf + sizeof(kisslicerHeightString)/sizeof(char) - 1, nullptr);
+				height = strtod(buf + i + strlen(kisslicerHeightString), nullptr);
 				return true;
 			}
 		}
 	}
-	return foundHeight;
+	return false;
 }
 
 // Scan the buffer for the layer height. The buffer is null-terminated.

@@ -102,6 +102,8 @@ public:
     static float MotorEndpointToPosition(int32_t endpoint, size_t drive);			// Convert number of motor steps to motor position
 
 	bool IsExtruding() const;														// Is filament being extruded?
+	unsigned int GetScheduledMoves() const { return scheduledMoves; }				// How many moves have been scheduled?
+	unsigned int GetCompletedMoves() const { return completedMoves; }				// How many moves have been completed?
 
 private:
 
@@ -168,6 +170,9 @@ private:
     int coreXYMode;										// 0 = Cartesian, 1 = CoreXY, 2 = CoreXZ, 3 = CoreYZ
     float axisFactors[AXES];							// How much further the motors need to move for each axis movement, on a CoreXY/CoreXZ/CoreYZ machine
     unsigned int stepErrors;							// count of step errors, for diagnostics
+
+	volatile unsigned int scheduledMoves;				// Move counters for the code queue
+	volatile unsigned int completedMoves;
 };
 
 //******************************************************************************************************

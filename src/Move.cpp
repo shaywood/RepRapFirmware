@@ -7,7 +7,7 @@
 
 #include "RepRapFirmware.h"
 
-Move::Move(Platform* p, GCodes* g) : currentDda(NULL)
+Move::Move(Platform* p, GCodes* g) : currentDda(NULL), scheduledMoves(0), completedMoves(0)
 {
 	active = false;
 
@@ -200,6 +200,8 @@ void Move::Spin()
 					{
 						ddaRingAddPointer = ddaRingAddPointer->GetNext();
 						idleCount = 0;
+
+						scheduledMoves++;
 					}
 #endif
 				}
@@ -1142,6 +1144,8 @@ void Move::CurrentMoveCompleted()
 	currentDda->Complete();
 	currentDda = nullptr;
 	ddaRingGetPointer = ddaRingGetPointer->GetNext();
+
+	completedMoves++;
 }
 
 // Try to start another move. Must be called with interrupts disabled, to avoid a race condition.

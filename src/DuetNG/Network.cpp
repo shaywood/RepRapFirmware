@@ -49,6 +49,7 @@ Network::Network(Platform* p) : platform(p), responseCode(0), responseBody(nullp
 {
 	strcpy(hostname, HOSTNAME);
 	ClearIpAddress();
+	wiFiServerVersion[0] = 0;
 }
 
 void Network::Init()
@@ -459,6 +460,7 @@ void Network::ProcessIncomingData(TransactionBuffer &buf)
 				uint16_t wifiState = reader.GetPrimitive<uint16_t>();
 				uint16_t espVcc = reader.GetPrimitive<uint16_t>();
 				const char *firmwareVersion = reader.GetString(16);
+				strncpy(wiFiServerVersion, firmwareVersion, ARRAY_SIZE(wiFiServerVersion));
 				const char *hostName = reader.GetString(64);
 				const char *ssid = reader.GetString(32);
 				if (reader.IsOk())

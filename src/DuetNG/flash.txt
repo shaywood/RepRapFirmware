@@ -1,3 +1,3 @@
 GENERIC::EraseAll
-send_file {Flash} "../Release/RepRapFirmware-DuetNG.bin" 0x400000 0
+send_file {Flash} "../Release/DuetWiFiFirmware.bin" 0x400000 0
 FLASH::ScriptGPNMV 2

@@ -105,7 +105,7 @@ private:
 	void FinishUpload(HttpSession& session);
 	void CancelUpload(HttpSession& session);
 	bool GetJsonResponse(uint32_t remoteIp, const char* request, OutputBuffer *&response, const char* key, const char* value, size_t valueLength, bool& keepOpen);
-	void SendConfigFile(HttpSession& session);
+	void SendFile(const char* nameOfFileToSend, HttpSession& session);
 
 	// Deal with incoming G-Codes
 	char gcodeBuffer[gcodeBufferLength];

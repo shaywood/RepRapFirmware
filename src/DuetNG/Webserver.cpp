@@ -46,7 +46,11 @@
  	 	 	 may also request different status responses by specifying the "type" keyword, followed
  	 	 	 by a custom status response type. Also see "M105 S1".
 
- rr_files?dir=xxx&flagDirs={1/0}
+ rr_filelist?dir=xxx
+ 	 	 	 Returns a JSON-formatted list of all the files in xxx including the type and size in the
+			 following format: "files":[{"type":'f/d',"name":"xxx",size:yyy},...]
+
+ rr_files?dir=xxx&flagDirs={1/0} [DEPRECATED]
  	 	 	 Returns a listing of the filenames in the /gcode directory of the SD card. 'dir' is a
  	 	 	 directory path relative to the root of the SD card. If the 'dir' variable is not present,
  	 	 	 it defaults to the /gcode directory. If flagDirs is set to 1, all directories will be
@@ -54,29 +58,17 @@
 
  rr_reply    Returns the last-known G-code reply as plain text (not encapsulated as JSON).
 
+ rr_configfile [DEPRECATED]
+			 Sends the config file as plain text (not encapsulated as JSON either).
+
+ rr_download?name=xxx
+			 Download a specified file from the SD card
+
  rr_upload?name=xxx
  	 	 	 Upload a specified file using a POST request. The payload of this request has to be
  	 	 	 the file content. Only one file may be uploaded at once. When the upload has finished,
  	 	 	 a JSON response with the variable "err" will be returned, which will be 0 if the job
  	 	 	 has finished without problems, it will be set to 1 otherwise.
-
- rr_upload_begin?name=xxx
- 	 	 	 Indicates that we wish to upload the specified file. xxx is the filename relative
- 	 	 	 to the root of the SD card. The directory component of the filename must already
- 	 	 	 exist. Returns variables ubuff (= max upload data we can accept in the next message)
- 	 	 	 and err (= 0 if the file was created successfully, nonzero if there was an error).
-
- rr_upload_data?data=xxx
- 	 	 	 Provides a data block for the file upload. Returns the samwe variables as rr_upload_begin,
- 	 	 	 except that err is only zero if the file was successfully created and there has not been
- 	 	 	 a file write error yet. This response is returned before attempting to write this data block.
-
- rr_upload_end
- 	 	 	 Indicates that we have finished sending upload data. The server closes the file and reports
- 	 	 	 the overall status in err. It may also return ubuff again.
-
- rr_upload_cancel
- 	 	 	 Indicates that the user wishes to cancel the current upload. Returns err and ubuff.
 
  rr_delete?name=xxx
 			 Delete file xxx. Returns err (zero if successful).
@@ -584,7 +576,17 @@ bool Webserver::ProcessFirstFragment(HttpSession& session, const char* command, 
 	// rr_configfile sends the config as plain text well
 	if (StringEquals(command, "configfile"))
 	{
-		SendConfigFile(session);
+		const char *configPath = platform->GetMassStorage()->CombineName(platform->GetSysDir(), platform->GetConfigFile());
+		char fileName[FILENAME_LENGTH];
+		strncpy(fileName, configPath, FILENAME_LENGTH);
+
+		SendFile(fileName, session);
+		return false;
+	}
+
+	if (StringEquals(command, "download") && StringEquals(key1, "name"))
+	{
+		SendFile(value1, session);
 		return false;
 	}
 
@@ -696,6 +698,10 @@ bool Webserver::ProcessFirstFragment(HttpSession& session, const char* command, 
 			return false;
 		}
 	}
+	else if (StringEquals(command, "filelist") && StringEquals(key1, "dir"))
+	{
+		response = reprap.GetFilelistResponse(value1);
+	}
 	else if (StringEquals(command, "files"))
 	{
 		const char* dir = (StringEquals(key1, "dir")) ? value1 : platform->GetGCodeDir();
@@ -768,17 +774,17 @@ void Webserver::SendGCodeReply(HttpSession& session)
 	}
 }
 
-void Webserver::SendConfigFile(HttpSession& session)
+void Webserver::SendFile(const char *nameOfFileToSend, HttpSession& session)
 {
-	FileStore *configFile = platform->GetFileStore(platform->GetSysDir(), platform->GetConfigFile(), false);
-	if (configFile == nullptr)
+	FileStore *file = platform->GetFileStore(FS_PREFIX, nameOfFileToSend, false);
+	if (file == nullptr)
 	{
-		network->SendReply(session.ip, 400, "File config.g not found");
+		network->SendReply(session.ip, 400, "File not found");
 	}
 	else
 	{
 		// Send an initial message containing the response code and the file size (needed for the Content-length field)
-		network->SendReply(session.ip, 200, configFile);		// tell the network layer to send the file
+		network->SendReply(session.ip, 200, file);		// tell the network layer to send the file
 	}
 }
 

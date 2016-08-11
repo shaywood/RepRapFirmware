@@ -151,6 +151,8 @@ public:
     bool AllAxesAreHomed() const;										// Return true if all axes are homed
     bool DoFileMacro(const char* fileName, bool reportMissing = true);	// Run a GCode macro in a file, optionally report error if not found
 
+	unsigned int GetScheduledMoves() const;		// Get the real number of scheduled moves
+
 private:
   
     void FillGCodeBuffers();											// Get new data into the gcode buffers

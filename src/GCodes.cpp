@@ -235,6 +235,10 @@ void GCodes::Spin()
 	{
 		auxGCode->SetFinished(ActOnCode(auxGCode, reply));
 	}
+	else if (codeQueue->FillBuffer(queuedGCode))
+	{
+		queuedGCode->SetFinished(ActOnCode(queuedGCode, reply));
+	}
 	else
 	{
 		// Perform the next operation of the state machine
@@ -572,6 +576,7 @@ void GCodes::StartNextGCode(StringRef& reply)
 	// Check for gcodes that we have already started
 	else if (queuedGCode->IsExecuting())
 	{
+		// Normally we should never get here...
 		queuedGCode->SetFinished(ActOnCode(queuedGCode, reply));
 	}
 	else if (httpGCode->IsExecuting())
@@ -600,10 +605,6 @@ void GCodes::StartNextGCode(StringRef& reply)
 		// We've handled a trigger, so nothing else to do
 	}
 	// Check for gcodes we can start
-	else if (codeQueue->FillBuffer(queuedGCode))
-	{
-		queuedGCode->SetFinished(ActOnCode(queuedGCode, reply));
-	}
 	else if (httpGCode->IsReady())
 	{
 		httpGCode->SetFinished(ActOnCode(httpGCode, reply));
@@ -762,6 +763,9 @@ void GCodes::Diagnostics(MessageType mtype)
 	serialGCode->Diagnostics(mtype);
 	auxGCode->Diagnostics(mtype);
 	fileGCode->Diagnostics(mtype);
+
+	queuedGCode->Diagnostics(mtype);
+	codeQueue->Diagnostics(mtype);
 }
 
 // The wait till everything's done function.  If you need the machine to
@@ -2600,7 +2604,7 @@ bool GCodes::ActOnCode(GCodeBuffer *gb, StringRef& reply)
 	}
 
 	// Can we queue this code?
-	if (gb == queuedGCode || !codeQueue->QueueCode(gb))
+	if (gb == queuedGCode || doingFileMacro || !codeQueue->QueueCode(gb))
 	{
 		gbCurrent = gb;
 
@@ -5721,6 +5725,13 @@ void GCodes::ListTriggers(StringRef reply, TriggerMask mask)
 			}
 		}
 	}
+}
+
+// Get the real number of scheduled moves
+unsigned int GCodes::GetScheduledMoves() const
+{
+	unsigned int scheduledMoves = reprap.GetMove()->GetScheduledMoves();
+	return (moveAvailable ? scheduledMoves + 1 : scheduledMoves);
 }
 
 // M38 (SHA1 hash of a file) implementation:

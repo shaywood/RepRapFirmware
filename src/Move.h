@@ -177,8 +177,8 @@ private:
     float axisFactors[AXES];							// How much further the motors need to move for each axis movement, on a CoreXY/CoreXZ/CoreYZ machine
     unsigned int stepErrors;							// count of step errors, for diagnostics
 
-	volatile unsigned int scheduledMoves;				// Move counters for the code queue
-	volatile unsigned int completedMoves;
+	unsigned int scheduledMoves;						// Move counters for the code queue
+	volatile unsigned int completedMoves;				// This one is modified by an ISR, hence volatile
 };
 
 //******************************************************************************************************

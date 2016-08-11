@@ -22,10 +22,19 @@ GCodeQueue::GCodeQueue() : freeItems(nullptr), queuedItems(nullptr)
 bool GCodeQueue::QueueCode(GCodeBuffer *gb)
 {
 	// Don't queue anything if no moves are being performed
-	if (reprap.GetMove()->GetScheduledMoves() == reprap.GetMove()->GetCompletedMoves())
+	unsigned int scheduledMoves = reprap.GetGCodes()->GetScheduledMoves();
+	if (scheduledMoves == reprap.GetMove()->GetCompletedMoves())
 	{
 		return false;
 	}
+
+#if SUPPORT_ROLAND
+	// Don't queue codes if the Roland module is active
+	if (reprap.GetRoland()->Active())
+	{
+		return false;
+	}
+#endif
 
 	// Check for G-Codes that can be queued
 	bool queueCode = false;
@@ -64,15 +73,19 @@ bool GCodeQueue::QueueCode(GCodeBuffer *gb)
 	// Does it make sense to queue this code?
 	if (queueCode)
 	{
+		char codeToRun[GCODE_LENGTH];
+		size_t codeToRunLength;
+
 		// Can we queue this code somewhere?
-		char codeToQueue[GCODE_LENGTH];
 		if (freeItems == nullptr)
 		{
-			// No - we've run out of free items
-			strncpy(codeToQueue, queuedItems->code, GCODE_LENGTH);
+			// No - we've run out of free items. Run the first outstanding code
 			queueCode = false;
+			codeToRunLength = strlen(queuedItems->code);
+			strncpy(codeToRun, queuedItems->code, codeToRunLength);
+			codeToRun[ARRAY_UPB(codeToRun)] = 0;
 
-			// Release the first queued item so that it can be reused below
+			// Release the first queued item so that it can be reused later
 			QueuedCode *item = queuedItems;
 			queuedItems = item->next;
 			item->next = nullptr;
@@ -83,8 +96,8 @@ bool GCodeQueue::QueueCode(GCodeBuffer *gb)
 		QueuedCode *code = freeItems;
 		freeItems = code->next;
 		code->AssignFrom(gb);
-		code->next = nullptr;
-		
+		code->executeAtMove = scheduledMoves;
+
 		// Append it to the list of queued codes
 		if (queuedItems == nullptr)
 		{
@@ -99,19 +112,12 @@ bool GCodeQueue::QueueCode(GCodeBuffer *gb)
 			}
 			last->next = code;
 		}
+		code->next = nullptr;
 
 		// Overwrite the passed gb's content if we could not store its original code
-		if (!queueCode)
+		if (!queueCode && !gb->Put(codeToRun, codeToRunLength))
 		{
-			for(size_t i = 0; i < GCODE_LENGTH; i++)
-			{
-				gb->Put(codeToQueue[i]);
-
-				if (codeToQueue[i] == 0)
-				{
-					break;
-				}
-			}
+			gb->Put('\n');
 		}
 	}
 
@@ -121,7 +127,7 @@ bool GCodeQueue::QueueCode(GCodeBuffer *gb)
 bool GCodeQueue::FillBuffer(GCodeBuffer *gb)
 {
 	// Can this buffer be filled?
-	if (queuedItems == nullptr || queuedItems->executeAtMove < reprap.GetMove()->GetCompletedMoves())
+	if (queuedItems == nullptr || queuedItems->executeAtMove > reprap.GetMove()->GetCompletedMoves())
 	{
 		// No - stop here
 		return false;
@@ -130,7 +136,6 @@ bool GCodeQueue::FillBuffer(GCodeBuffer *gb)
 	// Yes - load it into the passed GCodeBuffer instance
 	QueuedCode *code = queuedItems;
 	code->AssignTo(gb);
-	//source = code->source;
 
 	// Release this item again
 	queuedItems = queuedItems->next;
@@ -198,18 +203,21 @@ void GCodeQueue::Diagnostics(MessageType mtype)
 	}
 }
 
+
 // QueuedCode class
 
 void QueuedCode::AssignFrom(GCodeBuffer *gb)
 {
-	source = gb;
-	executeAtMove = reprap.GetMove()->GetScheduledMoves();
 	toolNumberAdjust = gb->GetToolNumberAdjust();
 	strncpy(code, gb->Buffer(), GCODE_LENGTH);
+	code[ARRAY_UPB(code)] = 0;
 }
 
 void QueuedCode::AssignTo(GCodeBuffer *gb)
 {
 	gb->SetToolNumberAdjust(toolNumberAdjust);
-	gb->Put(code, strlen(code));
+	if (!gb->Put(code, strlen(code)))
+	{
+		gb->Put('\n');
+	}
 }

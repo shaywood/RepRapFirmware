@@ -41,7 +41,6 @@ class QueuedCode
 	private:
 		QueuedCode *next;
 
-		GCodeBuffer *source;
 		char code[GCODE_LENGTH];
 		unsigned int executeAtMove;
 		int toolNumberAdjust;

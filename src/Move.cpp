@@ -93,7 +93,7 @@ void Move::Init()
 
 void Move::Exit()
 {
-	reprap.GetPlatform()->Message(GENERIC_MESSAGE, "Move class exited.\n");
+	reprap.GetPlatform()->Message(HOST_MESSAGE, "Move class exited.\n");
 	active = false;
 }
 
@@ -129,7 +129,11 @@ void Move::Spin()
 	}
 
 	// See if we can add another move to the ring
-	if (!addNoMoreMoves && ddaRingAddPointer->GetState() == DDA::empty)
+	if (
+#if SUPPORT_ROLAND
+			!reprap.GetRoland()->Active() &&
+#endif
+			!addNoMoreMoves && ddaRingAddPointer->GetState() == DDA::empty)
 	{
 		DDA *dda = ddaRingAddPointer;
 
@@ -188,6 +192,8 @@ void Move::Spin()
 						{
 							ddaRingAddPointer = ddaRingAddPointer->GetNext();
 							idleCount = 0;
+
+							scheduledMoves++;
 						}
 					} while (isSegmented);
 #else	// Use old code
@@ -401,6 +407,8 @@ void Move::Diagnostics(MessageType mtype)
 	reprap.GetPlatform()->MessageF(mtype, "MaxReps: %u, StepErrors: %u. Underruns: %u\n", maxReps, stepErrors, numLookaheadUnderruns);
 	maxReps = 0;
 	numLookaheadUnderruns = 0;
+
+	reprap.GetPlatform()->MessageF(mtype, "Scheduled moves: %u, Completed moves: %u\n", scheduledMoves, completedMoves);
 
 #if 0
 	if (sqCount != 0)

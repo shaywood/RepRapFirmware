@@ -43,19 +43,19 @@ CPPFLAGS += -Wall -c -std=gnu++11 -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfl
 
 
 FORCESYM := -u _sbrk -u link -u _close -u _fstat -u _isatty -u _lseek -u _read -u _write -u _exit -u kill -u _getpid
-LDFLAGS := -L"$(DUET_BOARD_PATH)/variants/duetNG" $(OPTIMISATION) -Wl,--gc-sections -Wl,--fatal-warnings -mcpu=cortex-m4 -T"$(DUET_BOARD_PATH)/variants/duetNG/linker_scripts/gcc/flash.ld" -Wl,-Map,"$(OUTPUT_PATH)/RepRapFirmware-DuetNG.map" -o "$(OUTPUT_PATH)/RepRapFirmware-DuetNG.elf" -mthumb -Wl,--cref -Wl,--check-sections -Wl,--gc-sections -Wl,--entry=Reset_Handler -Wl,--unresolved-symbols=report-all -Wl,--warn-common -Wl,--warn-section-align -Wl,--warn-unresolved-symbols -Wl,--start-group $(FORCESYM) $(BUILD_PATH)/*.o -lDuetNG -Wl,--end-group -lm -gcc
+LDFLAGS := -L"$(DUET_BOARD_PATH)/variants/duetNG" $(OPTIMISATION) -Wl,--gc-sections -Wl,--fatal-warnings -mcpu=cortex-m4 -T"$(DUET_BOARD_PATH)/variants/duetNG/linker_scripts/gcc/flash.ld" -Wl,-Map,"$(OUTPUT_PATH)/DuetWiFiFirmware.map" -o "$(OUTPUT_PATH)/DuetWiFiFirmware.elf" -mthumb -Wl,--cref -Wl,--check-sections -Wl,--gc-sections -Wl,--entry=Reset_Handler -Wl,--unresolved-symbols=report-all -Wl,--warn-common -Wl,--warn-section-align -Wl,--warn-unresolved-symbols -Wl,--start-group $(FORCESYM) $(BUILD_PATH)/*.o -lDuetNG -Wl,--end-group -lm -gcc
 
 
 # ================================= Target all ======================================
 .PHONY += all
-all: $(OUTPUT_PATH)/RepRapFirmware-DuetNG-$(VERSION).bin
-$(OUTPUT_PATH)/RepRapFirmware-DuetNG-$(VERSION).bin: $(OUTPUT_PATH)/RepRapFirmware-DuetNG-$(VERSION).elf
-	@echo "  BIN     ../Release/RepRapFirmware-DuetNG-$(VERSION).bin"
-	@$(OBJCOPY) -O binary $(OUTPUT_PATH)/RepRapFirmware-DuetNG-$(VERSION).elf $(OUTPUT_PATH)/RepRapFirmware-DuetNG-$(VERSION).bin
+all: $(OUTPUT_PATH)/DuetWiFiFirmware-$(VERSION).bin
+$(OUTPUT_PATH)/DuetWiFiFirmware-$(VERSION).bin: $(OUTPUT_PATH)/DuetWiFiFirmware-$(VERSION).elf
+	@echo "  BIN     ../Release/DuetWiFiFirmware-$(VERSION).bin"
+	@$(OBJCOPY) -O binary $(OUTPUT_PATH)/DuetWiFiFirmware-$(VERSION).elf $(OUTPUT_PATH)/DuetWiFiFirmware-$(VERSION).bin
 
-$(OUTPUT_PATH)/RepRapFirmware-DuetNG-$(VERSION).elf: $(BUILD_PATH) $(OUTPUT_PATH) $(C_OBJS) $(CPP_OBJS)
-	@echo "  LD      ../Release/RepRapFirmware-DuetNG-$(VERSION).elf"
-	@$(LD) $(LDFLAGS) -o $(OUTPUT_PATH)/RepRapFirmware-DuetNG-$(VERSION).elf
+$(OUTPUT_PATH)/DuetWiFiFirmware-$(VERSION).elf: $(BUILD_PATH) $(OUTPUT_PATH) $(C_OBJS) $(CPP_OBJS)
+	@echo "  LD      ../Release/DuetWiFiFirmware-$(VERSION).elf"
+	@$(LD) $(LDFLAGS) -o $(OUTPUT_PATH)/DuetWiFiFirmware-$(VERSION).elf
 -include $(DEPS)
 
 $(BUILD_PATH)/%.c.o: %.c
@@ -82,12 +82,14 @@ clean:
 
 # ================================= Target upload ===================================
 .PHONY += upload
-upload: $(OUTPUT_PATH)/RepRapFirmware-DuetNG-$(VERSION).bin
+upload: $(OUTPUT_PATH)/DuetWiFiFirmware-$(VERSION).bin
 	@echo "=> Rebooting hardware into bootloader mode..."
 	@stty -F $(PRIMARY_PORT) 115200 -ixon crtscts || true
 	@echo -n "M999 PERASE" > $(PRIMARY_PORT) || true
 	@sleep 1
 	@echo "=> Flashing new firmware binary..."
+	@cp $(OUTPUT_PATH)/DuetWiFiFirmware-$(VERSION).bin $(OUTPUT_PATH)/DuetWiFiFirmware.bin
 	@test -s $(PRIMARY_PORT) || $(BOSSAC_4E_PATH) $(PRIMARY_PORT) at91sam4e8-ek ./DuetNG/flash.txt || true
 	@test -s $(SECONDARY_PORT) || $(BOSSAC_4E_PATH) $(SECONDARY_PORT) at91sam4e8-ek ./DuetNG/flash.txt || true
+	@rm $(OUTPUT_PATH)/DuetWiFiFirmware.bin
 	@echo "=> Flashing complete! Reset your board to boot the new firmware."

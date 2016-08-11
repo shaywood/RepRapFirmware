@@ -3,10 +3,10 @@
 #
 # written by Christian Hammacher, 2016
 
-VERSION := 1.15-b4-ch
-DATE := 2016-07-28
+VERSION := 1.16-b1
+DATE := 2016-08-06
 
-ARDUINO_VERSION := 1.6.8
+ARDUINO_VERSION := 1.6.10
 GCC_VERSION := 4.8.3-2014q1
 DUET_BOARD_VERSION := 2.0.2
 

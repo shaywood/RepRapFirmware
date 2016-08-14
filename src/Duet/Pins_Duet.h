@@ -114,7 +114,7 @@ const Pin INKJET_SERIAL_OUT = 21;										// Serial bitpattern into the shift r
 const Pin INKJET_SHIFT_CLOCK = 20;										// Shift the register
 const Pin INKJET_STORAGE_CLOCK = 67;									// Put the pattern in the output register
 const Pin INKJET_OUTPUT_ENABLE = 66;									// Make the output visible
-const Pin INKJET_CLEAR = 36;											// Clear the register to 0
+const Pin INKJET_CLEAR = 65;											// Clear the register to 0
 
 #endif
 

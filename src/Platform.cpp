@@ -2605,6 +2605,28 @@ const char* Platform::GetElectronicsString() const
 	}
 }
 
+// Get the board string
+const char* Platform::GetBoardString() const
+{
+	switch (board)
+	{
+#ifdef DUET_NG
+# ifdef PROTOTYPE_1
+	case BoardType::DuetWiFi_06:			return "duetwifi06";
+# else
+	case BoardType::DuetWiFi_10:			return "duetwifi10";
+# endif
+#elif defined(__RADDS__)
+	case BoardType::RADDS_15:				return "radds15";
+#else
+	case BoardType::Duet_06:				return "duet06";
+	case BoardType::Duet_07:				return "duet07";
+	case BoardType::Duet_085:				return "duet085";
+#endif
+	default:								return "unknown";
+	}
+}
+
 // Direct pin operations
 // Set the specified pin to the specified output level. Return true if success, false if not allowed.
 bool Platform::SetPin(int pin, float level)

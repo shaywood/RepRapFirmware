@@ -42,7 +42,7 @@ const uint16_t gcodeBufferLength = 512;			// size of our gcode ring buffer, pref
 const uint16_t webMessageLength = 2000;			// maximum length of the web message we accept after decoding
 const size_t maxQualKeys = 5;					// max number of key/value pairs in the qualifier
 const size_t maxHttpSessions = 8;				// maximum number of simultaneous HTTP sessions
-const float httpSessionTimeout = 20.0;			// HTTP session timeout in seconds
+const uint32_t httpSessionTimeout = 20000;		// HTTP session timeout in milliseconds
 
 class Webserver
 {   
@@ -85,7 +85,7 @@ private:
 	{
 		uint32_t ip;
 		uint32_t nextFragment;
-		float lastQueryTime;
+		uint32_t lastQueryTime;
 		FileData fileBeingUploaded;
 		uint32_t postLength;
 		uint32_t bytesWritten;

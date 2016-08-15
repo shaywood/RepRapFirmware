@@ -944,21 +944,17 @@ void Webserver::HttpInterpreter::GetJsonResponse(const char* request, OutputBuff
 
 	if (StringEquals(request, "connect") && StringEquals(key, "password"))
 	{
-		if (IsAuthenticated())
+		if (IsAuthenticated() || reprap.CheckPassword(value))
 		{
-			// This IP is already authenticated, no need to check the password again
-			response->copy("{\"err\":0}");
-		}
-		else if (reprap.CheckPassword(value))
-		{
+			// Password OK
 			if (Authenticate())
 			{
-				// This is only possible if we have at least one HTTP session left
-				response->copy("{\"err\":0}");
+				// Client has been logged in
+				response->printf("{\"err\":0,\"sessionTimeout\":%u,\"boardType\":\"%s\"}", httpSessionTimeout, platform->GetBoardString());
 			}
 			else
 			{
-				// Otherwise report an error
+				// No more HTTP sessions available
 				response->copy("{\"err\":2}");
 			}
 		}

@@ -452,6 +452,7 @@ public:
 	void SetAtxPower(bool on);
 	void SetBoardType(BoardType bt);
 	const char* GetElectronicsString() const;
+	const char* GetBoardString() const;
 
 	// Timing
   

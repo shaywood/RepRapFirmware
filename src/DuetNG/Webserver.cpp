@@ -343,7 +343,7 @@ Webserver::HttpSession *Webserver::StartSession(uint32_t ip)
 		s->isAuthenticated = false;
 		s->nextFragment = 0;
 		s->fileBeingUploaded.Close();			// make sure no file is open
-		s->lastQueryTime = platform->Time();
+		s->lastQueryTime = millis();
 		++numSessions;
 		return s;
 	}
@@ -358,7 +358,7 @@ Webserver::HttpSession *Webserver::FindSession(uint32_t ip)
 		HttpSession *s = &sessions[i];
 		if (s->ip == ip)
 		{
-			s->lastQueryTime = platform->Time();
+			s->lastQueryTime = millis();
 			return s;
 		}
 	}
@@ -521,29 +521,33 @@ bool Webserver::ProcessFirstFragment(HttpSession& session, const char* command, 
 	// Get the first two key/value pairs
 	const char* key1 = (numQualKeys >= 1) ? qualifiers[0].key : "";
 	const char* value1 = (numQualKeys >= 1) ? qualifiers[0].value : "";
-	const char* key2 = (numQualKeys >= 1) ? qualifiers[1].key : "";
-	const char* value2 = (numQualKeys >= 1) ? qualifiers[1].value : "";
+	const char* key2 = (numQualKeys >= 2) ? qualifiers[1].key : "";
+	const char* value2 = (numQualKeys >= 2) ? qualifiers[1].value : "";
 
 	// Process connect messages first
 	if (StringEquals(command, "connect") && StringEquals(key1, "password"))
 	{
-		const char *response;
-		if (session.isAuthenticated)
+		OutputBuffer *response;
+		if (OutputBuffer::Allocate(response))
 		{
-			// This IP is already authenticated, no need to check the password again
-			response = "{\"err\":0}";
-		}
-		else if (reprap.CheckPassword(value1))
-		{
-			session.isAuthenticated = true;
-			response = "{\"err\":0}";
+			if (session.isAuthenticated || reprap.CheckPassword(value1))
+			{
+				// Password OK
+				session.isAuthenticated = true;
+				response->printf("{\"err\":0,\"sessionTimeout\":%u,\"boardType\":\"%s\"}", httpSessionTimeout, platform->GetBoardString());
+			}
+			else
+			{
+				// Wrong password
+				response->copy("{\"err\":1}");
+			}
+			network->SendReply(session.ip, 200 | rcJson, response);
 		}
 		else
 		{
-			// Wrong password
-			response = "{\"err\":1}";
+			// If we failed to allocate an output buffer, send back an error string
+			network->SendReply(session.ip, 200 | rcJson, "{\"err\":2}");
 		}
-		network->SendReply(session.ip, 200 | rcJson, response);
 		return false;
 	}
 
@@ -949,7 +953,7 @@ bool Webserver::CharFromClient(char c, const char* &error)
 void Webserver::CheckSessions()
 {
 	// Check if any HTTP session can be purged
-	const float time = platform->Time();
+	const uint32_t time = millis();
 	for (size_t i = 0; i < numSessions; ++i)
 	{
 		if ((time - sessions[i].lastQueryTime) > httpSessionTimeout)

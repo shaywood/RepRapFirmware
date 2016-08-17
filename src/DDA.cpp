@@ -109,16 +109,8 @@ bool DDA::Init(const GCodes::RawMove &nextMove, bool doMotorMapping)
 			endPoint[drive] = Move::MotorEndPointToMachine(drive, nextMove.coords[drive]);
 		}
 
-		int32_t delta;
-		if (drive < AXES)
-		{
-			endCoordinates[drive] = nextMove.coords[drive];
-			delta = endPoint[drive] - positionNow[drive];
-		}
-		else
-		{
-			delta = endPoint[drive];
-		}
+		endCoordinates[drive] = nextMove.coords[drive];
+		int32_t delta = (drive < AXES) ? endPoint[drive] - positionNow[drive] : endPoint[drive];
 
 		DriveMovement& dm = ddm[drive];
 		if (drive < AXES && !isSpecialDeltaMove)
@@ -545,7 +537,7 @@ void DDA::CalcNewSpeeds()
 }
 
 // This is called by Move::CurrentMoveCompleted to update the live coordinates from the move that has just finished
-bool DDA::FetchEndPosition(volatile int32_t ep[DRIVES], volatile float endCoords[AXES])
+bool DDA::FetchEndPosition(volatile int32_t ep[DRIVES], volatile float endCoords[DRIVES])
 {
 	for (size_t drive = 0; drive < DRIVES; ++drive)
 	{
@@ -558,6 +550,13 @@ bool DDA::FetchEndPosition(volatile int32_t ep[DRIVES], volatile float endCoords
 			endCoords[axis] = endCoordinates[axis];
 		}
 	}
+
+	// Extrusion amounts are always valid
+	for (size_t eDrive = AXES; eDrive < DRIVES; ++eDrive)
+	{
+		endCoords[eDrive] += endCoordinates[eDrive];
+	}
+
 	return endCoordinatesValid;
 }
 

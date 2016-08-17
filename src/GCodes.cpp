@@ -703,14 +703,18 @@ void GCodes::DoPause(bool externalToFile)
 	if (externalToFile)
 	{
 		// Pausing a file print via another input source
+		unsigned int skippedMoves;
 		pausedMoveBuffer[DRIVES] = feedRate;							// the call to PausePrint may or may not change this
-		FilePosition fPos = reprap.GetMove()->PausePrint(pausedMoveBuffer);	// tell Move we wish to pause the current print
+		FilePosition fPos = reprap.GetMove()->PausePrint(pausedMoveBuffer, skippedMoves);	// tell Move we wish to pause the current print
+
 		FileData& fdata = (stackPointer == 0) ? fileBeingPrinted : stack[0].fileState;
 		if (fPos != noFilePosition && fdata.IsLive())
 		{
 			fdata.Seek(fPos);											// replay the abandoned instructions if/when we resume
 		}
 		fileGCode->Init();
+		codeQueue->PurgeEntries(skippedMoves);
+
 		if (moveAvailable)
 		{
 			for (size_t drive = AXES; drive < DRIVES; ++drive)
@@ -885,7 +889,7 @@ bool GCodes::LoadMoveBufferFromGCode(GCodeBuffer *gb, bool doingG92, bool applyL
 				float moveArg = eMovement[eDrive] * distanceScale;
 				if (doingG92)
 				{
-					moveBuffer.coords[drive + AXES] = 0.0;		// no move required
+					moveBuffer.coords[drive + AXES] = moveArg;
 					lastRawExtruderPosition[drive] = moveArg;
 				}
 				else
@@ -1170,9 +1174,7 @@ bool GCodes::SetPositions(GCodeBuffer *gb)
 		return false;
 	}
 
-	reprap.GetMove()->GetCurrentUserPosition(moveBuffer.coords, 0);		// make sure move buffer is up to date
-	bool ok = LoadMoveBufferFromGCode(gb, true, false);
-	if (ok && includingAxes)
+	if (LoadMoveBufferFromGCode(gb, true, false))
 	{
 #if SUPPORT_ROLAND
 		if (reprap.GetRoland()->Active())
@@ -1784,6 +1786,7 @@ void GCodes::QueueFileToPrint(const char* fileName)
 			rawExtruderTotalByDrive[extruder - AXES] = 0.0;
 		}
 		rawExtruderTotal = 0.0;
+		reprap.GetMove()->ResetExtruderPositions();
 
 		fileToPrint.Set(f);
 	}
@@ -5630,6 +5633,9 @@ void GCodes::CancelPrint()
 	}
 
 	reprap.GetPrintMonitor()->StoppedPrint();
+
+	reprap.GetMove()->ResetMoveCounters();
+	codeQueue->Clear();
 }
 
 // Return true if all the heaters for the specified tool are at their set temperatures

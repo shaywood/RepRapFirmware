@@ -3,8 +3,8 @@
 #
 # written by Christian Hammacher, 2016
 
-VERSION := 1.16-b2
-DATE := 2016-08-14
+VERSION := 1.16-b3
+DATE := 2016-08-15
 
 ARDUINO_VERSION := 1.6.10
 GCC_VERSION := 4.8.3-2014q1

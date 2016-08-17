@@ -54,6 +54,7 @@ public:
     void ZProbeTriggered(DDA* hitDDA);					// What to do when a the Z probe is triggered
     void SetPositions(const float move[DRIVES]);		// Force the coordinates to be these
     void SetLiveCoordinates(const float coords[DRIVES]); // Force the live coordinates (see above) to be these
+	void ResetExtruderPositions();						// Resets the extrusion amounts of the live coordinates
     void SetXBedProbePoint(size_t index, float x);		// Record the X coordinate of a probe point
     void SetYBedProbePoint(size_t index, float y);		// Record the Y coordinate of a probe point
     void SetZBedProbePoint(size_t index, float z, bool wasXyCorrected, bool wasError);	// Record the Z coordinate of a probe point
@@ -98,7 +99,7 @@ public:
     float GetSimulationTime() const { return simulationTime; }						// Get the accumulated simulation time
     void PrintCurrentDda() const;													// For debugging
 
-    FilePosition PausePrint(float positions[DRIVES+1]);								// Pause the print as soon as we can
+    FilePosition PausePrint(float positions[DRIVES+1], unsigned int &skippedMoves);	// Pause the print as soon as we can and return the number of skipped moves
     bool NoLiveMovement() const;													// Is a move running, or are there any queued?
 
     int DoDeltaProbe(float frequency, float amplitude, float rate, float distance);
@@ -107,8 +108,10 @@ public:
     static float MotorEndpointToPosition(int32_t endpoint, size_t drive);			// Convert number of motor steps to motor position
 
 	bool IsExtruding() const;														// Is filament being extruded?
+
 	unsigned int GetScheduledMoves() const { return scheduledMoves; }				// How many moves have been scheduled?
 	unsigned int GetCompletedMoves() const { return completedMoves; }				// How many moves have been completed?
+	void ResetMoveCounters() { scheduledMoves = completedMoves = 0; }
 
 private:
 

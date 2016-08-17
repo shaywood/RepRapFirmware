@@ -547,6 +547,8 @@ WifiFirmwareUploader::EspUploadResult WifiFirmwareUploader::flashWriteBlock(uint
 	}
 
 	// If the block is all 0xFF characters, don't bother to send it because that's what the flash gets erased to
+	// chrishamm 2016-08-15: This code isn't working yet, so it has been disabled
+#if 0
 	bool empty = true;
 	for (size_t i = 0; i < blkSize/4; ++i)
 	{
@@ -562,6 +564,7 @@ WifiFirmwareUploader::EspUploadResult WifiFirmwareUploader::flashWriteBlock(uint
 	{
 		return EspUploadResult::success;
 	}
+#endif
 
 	// Calculate the block checksum
 	uint16_t cksum = checksum(blkBuf + dataOfst, blkSize, ESP_CHECKSUM_MAGIC);

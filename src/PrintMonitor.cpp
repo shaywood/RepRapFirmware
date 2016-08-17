@@ -664,6 +664,7 @@ bool PrintMonitor::GetFileInfoResponse(const char *filename, OutputBuffer *&resp
 		response->EncodeString(printingFileInfo.generatedBy, ARRAY_SIZE(printingFileInfo.generatedBy), false);
 		response->catf(",\"printDuration\":%d,\"fileName\":", (int)GetPrintDuration());
 		response->EncodeString(filenameBeingPrinted, ARRAY_SIZE(filenameBeingPrinted), false);
+		response->cat('}');
 	}
 	else
 	{

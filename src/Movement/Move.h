@@ -9,7 +9,7 @@
 #define MOVE_H_
 
 #include "DDA.h"
-#include "Matrix.h"
+#include "Libraries/Math/Matrix.h"
 #include "DeltaParameters.h"
 #include "DeltaProbe.h"
 

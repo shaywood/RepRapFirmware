@@ -25,7 +25,7 @@ Licence: GPL
 #include "GCodeBuffer.h"
 #include "GCodeQueue.h"
 
-#include "sha1.h"
+#include "Libraries/sha1/sha1.h"
 
 const unsigned int StackSize = 5;
 

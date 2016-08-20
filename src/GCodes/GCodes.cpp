@@ -2408,12 +2408,12 @@ void GCodes::SetPidParameters(GCodeBuffer *gb, int heater, StringRef& reply)
 		}
 		if (gb->Seen('I'))
 		{
-			pp.kI = gb->GetFValue() / platform->HeatSampleTime();
+			pp.kI = gb->GetFValue();
 			seen = true;
 		}
 		if (gb->Seen('D'))
 		{
-			pp.kD = gb->GetFValue() * platform->HeatSampleTime();
+			pp.kD = gb->GetFValue();
 			seen = true;
 		}
 		if (gb->Seen('T'))
@@ -2426,26 +2426,15 @@ void GCodes::SetPidParameters(GCodeBuffer *gb, int heater, StringRef& reply)
 			pp.kS = gb->GetFValue();
 			seen = true;
 		}
-		if (gb->Seen('W'))
-		{
-			pp.pidMax = gb->GetFValue();
-			seen = true;
-		}
-		if (gb->Seen('B'))
-		{
-			pp.fullBand = gb->GetFValue();
-			seen = true;
-		}
 
 		if (seen)
 		{
 			platform->SetPidParameters(heater, pp);
+			reprap.GetHeat()->UseModel(heater, false);
 		}
 		else
 		{
-			reply.printf("Heater %d P:%.2f I:%.3f D:%.2f T:%.2f S:%.2f W:%.1f B:%.1f",
-					heater, pp.kP, pp.kI * platform->HeatSampleTime(), pp.kD / platform->HeatSampleTime(),
-					pp.kT, pp.kS, pp.pidMax, pp.fullBand);
+			reply.printf("Heater %d P:%.2f I:%.3f D:%.2f T:%.2f S:%.2f", heater, pp.kP, pp.kI, pp.kD, pp.kT, pp.kS);
 		}
 	}
 }
@@ -3707,7 +3696,7 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		}
 		else
 		{
-			reply.printf("Heat sample time is %.3f seconds", platform->HeatSampleTime());
+			reply.printf("Heat sample time is %.3f seconds", platform->GetHeatSampleTime());
 		}
 		break;
 
@@ -4136,8 +4125,29 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		}
 		else
 		{
-			reply.printf("Cold extrudes are %s, use M302 P[1/0] to allow/deny them",
-					reprap.GetHeat()->ColdExtrude() ? "enabled" : "disabled");
+			reply.printf("Cold extrusion is %s, use M302 P[1/0] to allow/deny it",
+					reprap.GetHeat()->ColdExtrude() ? "allowed" : "denied");
+		}
+		break;
+
+	case 303: // Run PID tuning
+		if (gb->Seen('H'))
+		{
+			const size_t heater = gb->GetIValue();
+			const float temperature = (gb->Seen('S')) ? gb->GetFValue() : 225.0;
+			const float maxPwm = (gb->Seen('P')) ? gb->GetFValue() : 0.5;
+			if (heater < HEATERS && maxPwm >= 0.1 && maxPwm <= 1.0 && temperature >= 55.0 && temperature <= platform->GetTemperatureLimit())
+			{
+				reprap.GetHeat()->StartAutoTune(heater, temperature, maxPwm, reply);
+			}
+			else
+			{
+				reply.printf("Bad parameter in M303 command");
+			}
+		}
+		else
+		{
+			reprap.GetHeat()->GetAutoTuneStatus(reply);
 		}
 		break;
 
@@ -4150,6 +4160,92 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 
 	case 305: // Set/report specific heater parameters
 		SetHeaterParameters(gb, reply);
+		break;
+
+	case 307: // Set heater process model parameters
+		if (gb->Seen('H'))
+		{
+			size_t heater = gb->GetIValue();
+			if (heater < HEATERS)
+			{
+				const FopDt& model = reprap.GetHeat()->GetHeaterModel(heater);
+				bool seen = false;
+				float gain, tc, td, maxPwm;
+				bool usePid;
+				if (gb->Seen('A'))
+				{
+					gain = gb->GetFValue();
+					seen = true;
+				}
+				else
+				{
+					gain = model.GetGain();
+				}
+				if (gb->Seen('C'))
+				{
+					tc = gb->GetFValue();
+					seen = true;
+				}
+				else
+				{
+					tc = model.GetTimeConstant();
+				}
+				if (gb->Seen('D'))
+				{
+					td = gb->GetFValue();
+					seen = true;
+				}
+				else
+				{
+					td = model.GetDeadTime();
+				}
+				if (gb->Seen('B'))
+				{
+					usePid = (gb->GetIValue() == 0);
+					seen = true;
+				}
+				else
+				{
+					usePid = model.UsePid();
+				}
+				if (gb->Seen('S'))
+				{
+					maxPwm = gb->GetFValue();
+					seen = true;
+				}
+				else
+				{
+					maxPwm = model.GetMaxPwm();
+				}
+
+				if (seen)
+				{
+					if (reprap.GetHeat()->SetHeaterModel(heater, gain, tc, td, maxPwm, usePid))
+					{
+						reprap.GetHeat()->UseModel(heater, true);
+					}
+					else
+					{
+						reply.copy("Error: bad model parameters");
+					}
+				}
+				else
+				{
+					reply.printf("Heater %u model: gain %.1f, time constant %.1f, dead time %.1f, max PWM %.2f, in use: %s, mode: %s",
+							heater, model.GetGain(), model.GetTimeConstant(), model.GetDeadTime(), model.GetMaxPwm(),
+							(reprap.GetHeat()->IsModelUsed(heater)) ? "yes" : "no",
+							(model.UsePid()) ? "PID" : "bang-bang");
+					if (model.UsePid())
+					{
+						// When reporting the PID parameters, we scale them by 255 for compatibility with older firmware and other firmware
+						const PidParams& spParams = model.GetPidParameters(false);
+						reply.catf("\nSetpoint change: P%.1f, I%.2f, D%.1f", 255.0 * spParams.kP, 255.0 * spParams.kI, 255.0 * spParams.kD);
+						const PidParams& ldParams = model.GetPidParameters(true);
+						reply.catf("\nLoad change: P%.1f, I%.2f, D%.1f", 255.0 * ldParams.kP, 255.0 * ldParams.kI, 255.0 * ldParams.kD);
+					}
+				}
+			}
+		}
 		break;
 
 	case 350: // Set/report microstepping

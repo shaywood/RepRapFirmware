@@ -6,10 +6,6 @@
  */
 
 #include "WifiFirmwareUploader.h"
-<<<<<<< HEAD
-#include "Arduino.h"
-=======
->>>>>>> ed40658... Version 1.15rc2
 #include "RepRapFirmware.h"
 
 // ESP8266 command codes

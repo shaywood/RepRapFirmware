@@ -6,7 +6,7 @@
  */
 
 #include "FOPDT.h"
-#include "Core.h"
+#include "Arduino.h"
 
 // Check the model parameters are sensible, if they are then save them and return true.
 bool FopDt::SetParameters(float pg, float ptc, float pdt, float pMaxPwm, bool pUsePid)

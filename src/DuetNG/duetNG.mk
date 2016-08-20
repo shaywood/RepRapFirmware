@@ -21,11 +21,10 @@ INCLUDES += -I"$(DUET_LIBRARY_PATH)/SharedSpi" -I"$(DUET_LIBRARY_PATH)/Storage" 
 
 # Set board options
 INCLUDES += -I"$(PWD)" -I"$(PWD)/DuetNG"
-INCLUDES += -I"$(PWD)/Libraries/Fatfs" -I"$(PWD)/Libraries/Flash" -I"$(PWD)/Libraries/MCP4461" -I"$(PWD)/Libraries/TemperatureSensor" -I"$(PWD)/Libraries/sha1"
 
 # Get source files
-VPATH := $(PWD) $(PWD)/DuetNG
-VPATH += $(PWD)/Libraries/Fatfs $(PWD)/Libraries/Flash $(PWD)/Libraries/MCP4461 $(PWD)/Libraries/TemperatureSensor $(PWD)/Libraries/sha1
+VPATH := $(PWD) $(PWD)/DuetNG $(PWD)/GCodes $(PWD)/Heating $(PWD)/Movement $(PWD)/Storage
+VPATH += $(PWD)/Libraries/Fatfs $(PWD)/Libraries/Flash $(PWD)/Libraries/General $(PWD)/Libraries/Math $(PWD)/Libraries/MCP4461 $(PWD)/Libraries/TemperatureSensor $(PWD)/Libraries/sha1
 
 C_SOURCES += $(foreach dir,$(VPATH),$(wildcard $(dir)/*.c)) $(wildcard $(PWD)/*.c)
 CPP_SOURCES := $(foreach dir,$(VPATH),$(wildcard $(dir)/*.cpp)) $(wildcard $(PWD)/*.cpp)

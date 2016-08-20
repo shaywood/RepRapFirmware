@@ -3,7 +3,7 @@
 #
 # written by Christian Hammacher, 2016
 
-VERSION := 1.15-rc2-ch
+VERSION := 1.15-rc3-ch
 DATE := 2016-08-20
 
 ARDUINO_VERSION := 1.6.10

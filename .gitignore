@@ -1,7 +1,7 @@
 *.d
 *.o
-!Release/*.bin
-!Release/*/*.bin
-!Release/*/*/*.bin
+/Release/**/obj
+/Release/**/*.map
+/Release/**/*.elf
 *~
 *orig

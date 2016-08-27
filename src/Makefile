@@ -3,10 +3,9 @@
 #
 # written by Christian Hammacher, 2016
 
-VERSION := 1.15-rc4-ch
-DATE := 2016-08-21
+VERSION := 1.15
+DATE := 2016-08-27
 
-ARDUINO_VERSION := 1.6.10
 GCC_VERSION := 4.8.3-2014q1
 DUET_BOARD_VERSION := 2.0.4
 
@@ -27,7 +26,7 @@ ifeq ($(UNAME),Darwin)
   ARDUINO_PATH := $(HOME)/Library/Arduino15
 endif
 ifeq (,$(wildcard $(ARDUINO_PATH)/.))
-  $(error Arduino directory not found! Are you using Arduino $(ARDUINO_VERSION)?)
+  $(error Arduino directory not found! Please install it first.)
 endif
 
 # Detect Duet board path

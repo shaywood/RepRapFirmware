@@ -1,4 +1,4 @@
-# Makefile for RepRapFirmware-Duet (SAM3X8E)
+# Makefile for RepRapFirmware (SAM3X8E)
 # written by Christian Hammacher
 #
 # Licensed under the terms of the GNU Public License v2
@@ -6,8 +6,8 @@
 #
 
 # Workspace directories
-BUILD_PATH := $(PWD)/../Release/obj-duet
-OUTPUT_PATH := $(PWD)/../Release
+BUILD_PATH := $(PWD)/../Release/Duet-0.6-0.8.5/obj
+OUTPUT_PATH := $(PWD)/../Release/Duet-0.6-0.8.5
 
 # Firmware port for 1200bps touch
 PORT := /dev/ttyACM0
@@ -39,19 +39,19 @@ CFLAGS := -DVERSION=\"$(VERSION)\" -DDATE=\"$(DATE)\" -D__SAM3X8E__ -Dprintf=ipr
 CPPFLAGS := -DVERSION=\"$(VERSION)\" -DDATE=\"$(DATE)\" -D__SAM3X8E__ -Dprintf=iprintf -Wall -c -std=gnu++11 -mcpu=cortex-m3 -mthumb -ffunction-sections -fdata-sections -fno-threadsafe-statics -fno-rtti -fno-exceptions -nostdlib --param max-inline-insns-single=500 -MMD -MP
 
 FORCESYM := -u _sbrk -u link -u _close -u _fstat -u _isatty -u _lseek -u _read -u _write -u _exit -u kill -u _getpid
-LDFLAGS := -L"$(DUET_BOARD_PATH)/variants/duet" $(OPTIMISATION) -Wl,--gc-sections -Wl,--fatal-warnings -mcpu=cortex-m3 -T"$(DUET_BOARD_PATH)/variants/duet/linker_scripts/gcc/flash.ld" -Wl,-Map,"$(OUTPUT_PATH)/RepRapFirmware-Duet.map" -o "$(OUTPUT_PATH)/RepRapFirmware-Duet.elf" -mthumb -Wl,--cref -Wl,--check-sections -Wl,--gc-sections -Wl,--entry=Reset_Handler -Wl,--unresolved-symbols=report-all -Wl,--warn-common -Wl,--warn-section-align -Wl,--warn-unresolved-symbols -Wl,--start-group $(FORCESYM) $(BUILD_PATH)/*.o -lDuet -Wl,--end-group -lm -gcc
+LDFLAGS := -L"$(DUET_BOARD_PATH)/variants/duet" $(OPTIMISATION) -Wl,--gc-sections -Wl,--fatal-warnings -mcpu=cortex-m3 -T"$(DUET_BOARD_PATH)/variants/duet/linker_scripts/gcc/flash.ld" -Wl,-Map,"$(OUTPUT_PATH)/RepRapFirmware-$(VERSION).map" -o "$(OUTPUT_PATH)/RepRapFirmware-$(VERSION).elf" -mthumb -Wl,--cref -Wl,--check-sections -Wl,--gc-sections -Wl,--entry=Reset_Handler -Wl,--unresolved-symbols=report-all -Wl,--warn-common -Wl,--warn-section-align -Wl,--warn-unresolved-symbols -Wl,--start-group $(FORCESYM) $(BUILD_PATH)/*.o -lDuet -Wl,--end-group -lm -gcc
 
 
 # ================================= Target all ======================================
 .PHONY += all
-all: $(OUTPUT_PATH)/RepRapFirmware-Duet-$(VERSION).bin
-$(OUTPUT_PATH)/RepRapFirmware-Duet-$(VERSION).bin: $(OUTPUT_PATH)/RepRapFirmware-Duet-$(VERSION).elf
-	@echo "  BIN     ../Release/RepRapFirmware-Duet-$(VERSION).bin"
-	@$(OBJCOPY) -O binary $(OUTPUT_PATH)/RepRapFirmware-Duet-$(VERSION).elf $(OUTPUT_PATH)/RepRapFirmware-Duet-$(VERSION).bin
+all: $(OUTPUT_PATH)/RepRapFirmware-$(VERSION).bin
+$(OUTPUT_PATH)/RepRapFirmware-$(VERSION).bin: $(OUTPUT_PATH)/RepRapFirmware-$(VERSION).elf
+	@echo "  BIN     ../Release/Duet-0.6-0.8.5/RepRapFirmware-$(VERSION).bin"
+	@$(OBJCOPY) -O binary $(OUTPUT_PATH)/RepRapFirmware-$(VERSION).elf $(OUTPUT_PATH)/RepRapFirmware-$(VERSION).bin
 
-$(OUTPUT_PATH)/RepRapFirmware-Duet-$(VERSION).elf: $(BUILD_PATH) $(OUTPUT_PATH) $(C_OBJS) $(CPP_OBJS)
-	@echo "  LD      ../Release/RepRapFirmware-Duet-$(VERSION).elf"
-	@$(LD) $(LDFLAGS) -o $(OUTPUT_PATH)/RepRapFirmware-Duet-$(VERSION).elf
+$(OUTPUT_PATH)/RepRapFirmware-$(VERSION).elf: $(BUILD_PATH) $(OUTPUT_PATH) $(C_OBJS) $(CPP_OBJS)
+	@echo "  LD      ../Release/Duet-0.6-0.8.5/RepRapFirmware-$(VERSION).elf"
+	@$(LD) $(LDFLAGS) -o $(OUTPUT_PATH)/RepRapFirmware-$(VERSION).elf
 -include $(DEPS)
 
 $(BUILD_PATH)/%.c.o: %.c
@@ -78,9 +78,10 @@ clean:
 
 # ================================= Target upload ===================================
 .PHONY += upload
-upload: $(OUTPUT_PATH)/RepRapFirmware-Duet-$(VERSION).bin
+upload: $(OUTPUT_PATH)/RepRapFirmware-$(VERSION).bin
 	@echo "=> Rebooting hardware into bootloader mode..."
-	@stty -F $(PORT) 1200 -ixon -crtscts || true
+	@stty -F $(PORT) 115200 -ixon crtscts || true
+	@echo -n "M999 PERASE" > $(PORT) || true
 	@sleep 1
 	@echo "=> Flashing new firmware binary..."
-	@$(BOSSAC_PATH) -u -e -w -b $(OUTPUT_PATH)/RepRapFirmware-Duet-$(VERSION).bin -R
+	@$(BOSSAC_PATH) -u -e -w -b $(OUTPUT_PATH)/RepRapFirmware-$(VERSION).bin -R

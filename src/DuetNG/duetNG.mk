@@ -6,8 +6,8 @@
 #
 
 # Workspace directories
-BUILD_PATH := $(PWD)/../Release/obj-duetNG
-OUTPUT_PATH := $(PWD)/../Release
+BUILD_PATH := $(PWD)/../Release/Duet-WiFi/obj
+OUTPUT_PATH := $(PWD)/../Release/Duet-WiFi
 
 # Firmware port for 1200bps touch
 PRIMARY_PORT := /dev/ttyACM0
@@ -42,18 +42,18 @@ CPPFLAGS += -Wall -c -std=gnu++11 -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfl
 
 
 FORCESYM := -u _sbrk -u link -u _close -u _fstat -u _isatty -u _lseek -u _read -u _write -u _exit -u kill -u _getpid
-LDFLAGS := -L"$(DUET_BOARD_PATH)/variants/duetNG" $(OPTIMISATION) -Wl,--gc-sections -Wl,--fatal-warnings -mcpu=cortex-m4 -T"$(DUET_BOARD_PATH)/variants/duetNG/linker_scripts/gcc/flash.ld" -Wl,-Map,"$(OUTPUT_PATH)/DuetWiFiFirmware.map" -o "$(OUTPUT_PATH)/DuetWiFiFirmware.elf" -mthumb -Wl,--cref -Wl,--check-sections -Wl,--gc-sections -Wl,--entry=Reset_Handler -Wl,--unresolved-symbols=report-all -Wl,--warn-common -Wl,--warn-section-align -Wl,--warn-unresolved-symbols -Wl,--start-group $(FORCESYM) $(BUILD_PATH)/*.o -lDuetNG -Wl,--end-group -lm -gcc
+LDFLAGS := -L"$(DUET_BOARD_PATH)/variants/duetNG" $(OPTIMISATION) -Wl,--gc-sections -Wl,--fatal-warnings -mcpu=cortex-m4 -T"$(DUET_BOARD_PATH)/variants/duetNG/linker_scripts/gcc/flash.ld" -Wl,-Map,"$(OUTPUT_PATH)/DuetWiFiFirmware-$(VERSION).map" -o "$(OUTPUT_PATH)/DuetWiFiFirmware-$(VERSION).elf" -mthumb -Wl,--cref -Wl,--check-sections -Wl,--gc-sections -Wl,--entry=Reset_Handler -Wl,--unresolved-symbols=report-all -Wl,--warn-common -Wl,--warn-section-align -Wl,--warn-unresolved-symbols -Wl,--start-group $(FORCESYM) $(BUILD_PATH)/*.o -lDuetNG -Wl,--end-group -lm -gcc
 
 
 # ================================= Target all ======================================
 .PHONY += all
 all: $(OUTPUT_PATH)/DuetWiFiFirmware-$(VERSION).bin
 $(OUTPUT_PATH)/DuetWiFiFirmware-$(VERSION).bin: $(OUTPUT_PATH)/DuetWiFiFirmware-$(VERSION).elf
-	@echo "  BIN     ../Release/DuetWiFiFirmware-$(VERSION).bin"
+	@echo "  BIN     ../Release/Duet-WiFi/DuetWiFiFirmware-$(VERSION).bin"
 	@$(OBJCOPY) -O binary $(OUTPUT_PATH)/DuetWiFiFirmware-$(VERSION).elf $(OUTPUT_PATH)/DuetWiFiFirmware-$(VERSION).bin
 
 $(OUTPUT_PATH)/DuetWiFiFirmware-$(VERSION).elf: $(BUILD_PATH) $(OUTPUT_PATH) $(C_OBJS) $(CPP_OBJS)
-	@echo "  LD      ../Release/DuetWiFiFirmware-$(VERSION).elf"
+	@echo "  LD      ../Release/Duet-WiFi/DuetWiFiFirmware-$(VERSION).elf"
 	@$(LD) $(LDFLAGS) -o $(OUTPUT_PATH)/DuetWiFiFirmware-$(VERSION).elf
 -include $(DEPS)
 

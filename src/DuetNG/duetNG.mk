@@ -75,7 +75,7 @@ $(OUTPUT_PATH):
 # ================================= Target clean ====================================
 .PHONY += clean
 clean:
-	@rm -rf $(BUILD_PATH) $(OUTPUT_PATH)
+	@rm -rf $(BUILD_PATH) $(OUTPUT_PATH)/DuetWiFiFirmware-*.bin
 	$(info DuetNG build directories removed.)
 
 

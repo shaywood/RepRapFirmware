@@ -3,8 +3,8 @@
 #
 # written by Christian Hammacher, 2016
 
-VERSION := 1.15
-DATE := 2016-08-27
+VERSION := 1.15a
+DATE := 2016-09-08
 
 GCC_VERSION := 4.8.3-2014q1
 DUET_BOARD_VERSION := 2.0.4

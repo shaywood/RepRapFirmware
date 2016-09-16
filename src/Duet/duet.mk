@@ -72,7 +72,7 @@ $(OUTPUT_PATH):
 # ================================= Target clean ====================================
 .PHONY += clean
 clean:
-	@rm -rf $(BUILD_PATH) $(OUTPUT_PATH)
+	@rm -rf $(BUILD_PATH) $(OUTPUT_PATH)/RepRapFirmware-*.bin
 	$(info Duet build directories removed.)
 
 

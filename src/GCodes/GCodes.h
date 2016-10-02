@@ -158,7 +158,8 @@ public:
     bool AllAxesAreHomed() const;										// Return true if all axes are homed
     bool DoFileMacro(const char* fileName, bool reportMissing = true);	// Run a GCode macro in a file, optionally report error if not found
 
-	unsigned int GetScheduledMoves() const;		// Get the real number of scheduled moves
+	unsigned int GetScheduledMoves() const;								// Get the real number of scheduled moves
+    void CancelPrint();													// Cancel the current print
 
 private:
   
@@ -172,7 +173,6 @@ private:
     bool HandleGcode(GCodeBuffer* gb, StringRef& reply);				// Do a G code
     bool HandleMcode(GCodeBuffer* gb, StringRef& reply);				// Do an M code
     bool HandleTcode(GCodeBuffer* gb, StringRef& reply);				// Do a T code
-    void CancelPrint();													// Cancel the current print
     int SetUpMove(GCodeBuffer* gb, StringRef& reply);					// Pass a move on to the Move module
     bool DoDwell(GCodeBuffer *gb);										// Wait for a bit
     bool DoDwellTime(float dwell);										// Really wait for a bit

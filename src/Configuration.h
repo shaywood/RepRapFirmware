@@ -187,17 +187,6 @@ const float FILAMENT_WIDTH = 1.75;					// Millimetres
 
 #define CONFIG_FILE "config.g"
 #define DEFAULT_FILE "default.g"
-#define HOME_X_G "homex.g"
-#define HOME_Y_G "homey.g"
-#define HOME_Z_G "homez.g"
-#define HOME_ALL_G "homeall.g"
-#define HOME_DELTA_G "homedelta.g"
-#define BED_EQUATION_G "bed.g"
-#define PAUSE_G "pause.g"
-#define RESUME_G "resume.g"
-#define CANCEL_G "cancel.g"
-#define STOP_G "stop.g"
-#define SLEEP_G "sleep.g"
 
 #define EOF_STRING "<!-- **EoF** -->"
 

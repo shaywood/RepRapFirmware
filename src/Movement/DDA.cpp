@@ -655,7 +655,7 @@ void DDA::SetPositions(const float move[DRIVES], size_t numDrives)
 
 // Get a Cartesian end coordinate from this move
 float DDA::GetEndCoordinate(size_t drive, bool disableDeltaMapping)
-pre(disableDeltaMapping || drive < AXES)
+pre(disableDeltaMapping || drive < MAX_AXES)
 {
 	if (disableDeltaMapping)
 	{

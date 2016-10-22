@@ -2708,48 +2708,6 @@ bool Platform::Inkjet(int bitPattern)
 }
 #endif
 
-bool Platform::GCodeAvailable(const SerialSource source) const
-{
-	switch (source)
-	{
-		case SerialSource::USB:
-			return SERIAL_MAIN_DEVICE.available() > 0;
-
-		case SerialSource::AUX:
-			return SERIAL_AUX_DEVICE.available() > 0;
-
-		case SerialSource::AUX2:
-#ifdef SERIAL_AUX2_DEVICE
-			return SERIAL_AUX2_DEVICE.available() > 0;
-#else
-			return false;
-#endif
-	}
-
-	return false;
-}
-
-char Platform::ReadFromSource(const SerialSource source)
-{
-	switch (source)
-	{
-		case SerialSource::USB:
-			return static_cast<char>(SERIAL_MAIN_DEVICE.read());
-
-		case SerialSource::AUX:
-			return static_cast<char>(SERIAL_AUX_DEVICE.read());
-
-		case SerialSource::AUX2:
-#ifdef SERIAL_AUX2_DEVICE
-			return static_cast<char>(SERIAL_AUX2_DEVICE.read());
-#else
-			return 0;
-#endif
-	}
-
-	return 0;
-}
-
 // CPU temperature
 void Platform::GetMcuTemperatures(float& minT, float& currT, float& maxT) const
 {

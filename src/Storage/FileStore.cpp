@@ -13,7 +13,6 @@ FileStore::FileStore(Platform* p) : platform(p)
 
 void FileStore::Init()
 {
-	bufferPointer = 0;
 	inUse = false;
 	writing = false;
 	lastBufferEntry = 0;
@@ -45,7 +44,6 @@ bool FileStore::Open(const char* directory, const char* fileName, bool write)
 							? platform->GetMassStorage()->CombineName(directory, fileName)
 								: fileName;
 	writing = write;
-	lastBufferEntry = FileBufLen;
 
 	FRESULT openReturn = f_open(&file, location, (writing) ?  FA_CREATE_ALWAYS | FA_WRITE : FA_OPEN_EXISTING | FA_READ);
 	if (openReturn != FR_OK)
@@ -59,7 +57,6 @@ bool FileStore::Open(const char* directory, const char* fileName, bool write)
 		return false;
 	}
 
-	bufferPointer = (writing) ? 0 : FileBufLen;
 	inUse = true;
 	openCount = 1;
 	return true;
@@ -125,7 +122,6 @@ bool FileStore::Close()
 	FRESULT fr = f_close(&file);
 	inUse = false;
 	writing = false;
-	lastBufferEntry = 0;
 	closeRequested = false;
 	return ok && fr == FR_OK;
 }
@@ -137,27 +133,13 @@ bool FileStore::Seek(FilePosition pos)
 		platform->Message(GENERIC_MESSAGE, "Error: Attempt to seek on a non-open file.\n");
 		return false;
 	}
-	if (writing)
-	{
-		WriteBuffer();
-	}
 	FRESULT fr = f_lseek(&file, pos);
-	bufferPointer = (writing) ? 0 : FileBufLen;
 	return fr == FR_OK;
 }
 
 FilePosition FileStore::Position() const
 {
-	FilePosition pos = file.fptr;
-	if (writing)
-	{
-		pos += bufferPointer;
-	}
-	else if (bufferPointer < lastBufferEntry)
-	{
-		pos -= (lastBufferEntry - bufferPointer);
-	}
-	return pos;
+	return file.fptr;
 }
 
 #if 0	// not currently used
@@ -188,63 +170,12 @@ float FileStore::FractionRead() const
 	return (float)Position() / (float)len;
 }
 
-uint8_t FileStore::Status()
-{
-	if (!inUse)
-		return (uint8_t)IOStatus::nothing;
-
-	if (lastBufferEntry == FileBufLen)
-		return (uint8_t)IOStatus::byteAvailable;
-
-	if (bufferPointer < lastBufferEntry)
-		return (uint8_t)IOStatus::byteAvailable;
-
-	return (uint8_t)IOStatus::nothing;
-}
-
-bool FileStore::ReadBuffer()
-{
-	FRESULT readStatus = f_read(&file, GetBuffer(), FileBufLen, &lastBufferEntry);	// Read a chunk of file
-	if (readStatus != FR_OK)
-	{
-		platform->Message(GENERIC_MESSAGE, "Error: Cannot read file.\n");
-		return false;
-	}
-	bufferPointer = 0;
-	return true;
-}
-
-// Single character read via the buffer
+// Single character read
 bool FileStore::Read(char& b)
 {
-	if (!inUse)
-	{
-		platform->Message(GENERIC_MESSAGE, "Error: Attempt to read from a non-open file.\n");
-		return false;
-	}
-
-	if (bufferPointer >= FileBufLen)
-	{
-		bool ok = ReadBuffer();
-		if (!ok)
-		{
-			return false;
-		}
-	}
-
-	if (bufferPointer >= lastBufferEntry)
-	{
-		b = 0;  // Good idea?
-		return false;
-	}
-
-	b = (char) GetBuffer()[bufferPointer];
-	bufferPointer++;
-
-	return true;
+	return Read(&b, sizeof(char));
 }
 
-// Block read, doesn't use the buffer
 // Returns the number of bytes read or -1 if the read process failed
 int FileStore::Read(char* extBuf, size_t nBytes)
 {
@@ -254,7 +185,6 @@ int FileStore::Read(char* extBuf, size_t nBytes)
 		return -1;
 	}
 
-	bufferPointer = FileBufLen;			// invalidate the buffer
 	UINT bytes_read;
 	FRESULT readStatus = f_read(&file, extBuf, nBytes, &bytes_read);
 	if (readStatus != FR_OK)
@@ -265,33 +195,9 @@ int FileStore::Read(char* extBuf, size_t nBytes)
 	return (int)bytes_read;
 }
 
-bool FileStore::WriteBuffer()
-{
-	if (bufferPointer != 0)
-	{
-		if (!InternalWriteBlock((const char*)GetBuffer(), bufferPointer))
-		{
-			return false;
-		}
-		bufferPointer = 0;
-	}
-	return true;
-}
-
 bool FileStore::Write(char b)
 {
-	if (!inUse)
-	{
-		platform->Message(GENERIC_MESSAGE, "Error: Attempt to write byte to a non-open file.\n");
-		return false;
-	}
-	GetBuffer()[bufferPointer] = b;
-	bufferPointer++;
-	if (bufferPointer >= FileBufLen)
-	{
-		return WriteBuffer();
-	}
-	return true;
+	return Write(&b, sizeof(char));
 }
 
 bool FileStore::Write(const char* b)
@@ -299,7 +205,6 @@ bool FileStore::Write(const char* b)
 	return Write(b, strlen(b));
 }
 
-// Direct block write that bypasses the buffer. Used when uploading files.
 bool FileStore::Write(const char *s, size_t len)
 {
 	if (!inUse)
@@ -308,15 +213,6 @@ bool FileStore::Write(const char *s, size_t len)
 		return false;
 	}
 
-	if (!WriteBuffer())
-	{
-		return false;
-	}
-	return InternalWriteBlock(s, len);
-}
-
-bool FileStore::InternalWriteBlock(const char *s, size_t len)
-{
 	size_t bytesWritten;
 	uint32_t time = micros();
 
@@ -339,10 +235,6 @@ bool FileStore::Flush()
 	if (!inUse)
 	{
 		platform->Message(GENERIC_MESSAGE, "Error: Attempt to flush a non-open file.\n");
-		return false;
-	}
-	if (!WriteBuffer())
-	{
 		return false;
 	}
 	return f_sync(&file) == FR_OK;

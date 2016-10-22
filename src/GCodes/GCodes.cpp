@@ -39,14 +39,21 @@ GCodes::GCodes(Platform* p, Webserver* w) :
 	platform(p), webserver(w), active(false), stackPointer(0), auxGCodeReply(nullptr), isFlashing(false),
 	fileBeingHashed(nullptr)
 {
+	httpInput = new RegularGCodeInput(true);
+	telnetInput = new RegularGCodeInput(true);
+	fileInput = new FileGCodeInput();
+	serialInput = new StreamGCodeInput(SERIAL_MAIN_DEVICE);
+	auxInput = new StreamGCodeInput(SERIAL_AUX_DEVICE);
+	fileMacroInput = new FileGCodeInput();
+
 	httpGCode = new GCodeBuffer(platform, "http", HTTP_MESSAGE);
 	telnetGCode = new GCodeBuffer(platform, "telnet", TELNET_MESSAGE);
 	fileGCode = new GCodeBuffer(platform, "file", GENERIC_MESSAGE);
 	serialGCode = new GCodeBuffer(platform, "serial", HOST_MESSAGE);
 	auxGCode = new GCodeBuffer(platform, "aux", AUX_MESSAGE);
 	fileMacroGCode = new GCodeBuffer(platform, "macro", GENERIC_MESSAGE);
-	queuedGCode = new GCodeBuffer(platform, "queue", GENERIC_MESSAGE);
 
+	queuedGCode = new GCodeBuffer(platform, "queue", GENERIC_MESSAGE);
 	codeQueue = new GCodeQueue();
 }
 
@@ -91,6 +98,9 @@ void GCodes::Init()
 // This is called from Init and when doing an emergency stop
 void GCodes::Reset()
 {
+	// Here we could reset the input sources as well, but this would mess up M122\nM999,
+	// since both codes are sent at once from the web interface. Hence we don't do this.
+
 	httpGCode->Init();
 	telnetGCode->Init();
 	fileGCode->Init();
@@ -98,6 +108,7 @@ void GCodes::Reset()
 	auxGCode->Init();
 	auxGCode->SetCommsProperties(1);					// by default, we require a checksum on the aux port
 	fileMacroGCode->Init();
+
 	moveAvailable = false;
 	fileBeingPrinted.Close();
 	fileToPrint.Close();
@@ -163,52 +174,54 @@ void GCodes::DoFilePrint(GCodeBuffer* gb, StringRef& reply)
 {
 	if (gb != fileGCode || !isPaused)
 	{
-		for (int i = 0; i < 50 && fileBeingPrinted.IsLive(); ++i)
+		FileGCodeInput *input = (gb == fileMacroGCode) ? fileMacroInput : fileInput;
+
+		// Do we have more data to process?
+		if (input->ReadFromFile(fileBeingPrinted))
 		{
-			char b;
-			if (fileBeingPrinted.Read(b))
+			// Yes - for regular prints, keep track of the current file position
+			if (gb->StartingNewCode() && gb == fileGCode)
 			{
-				if (gb->StartingNewCode() && gb == fileGCode)
-				{
-					filePos = fileBeingPrinted.GetPosition() - 1;
-					//debugPrintf("Set file pos %u\n", filePos);
-				}
-				if (gb->Put(b))
+				filePos = fileBeingPrinted.GetPosition() - input->BytesCached() - 1;
+				//debugPrintf("Set file pos %u\n", filePos);
+			}
+
+			// Then fill up the GCodeBuffer and run the next code
+			if (input->FillBuffer(gb))
+			{
+				gb->SetFinished(ActOnCode(gb, reply));
+			}
+		}
+		else
+		{
+			// No - looks like we have reached the end of the file.
+			// Don't close the file until all moves have been completed, in case the print gets paused.
+			// Also, this keeps the state as 'Printing' until the print really has finished.
+			if (!gb->StartingNewCode())		// if there is something in the buffer
+			{
+				if (gb->Put('\n')) 			// in case there wasn't one ending the file
 				{
 					gb->SetFinished(ActOnCode(gb, reply));
-					break;
+				}
+				else
+				{
+					gb->Init();
 				}
 			}
-			else
+			else if (AllMovesAreFinishedAndMoveBufferIsLoaded())
 			{
-				// We have reached the end of the file.
-				// Don't close the file until all moves have been completed, in case the print gets paused.
-				// Also, this keeps the state as 'Printing' until the print really has finished.
-				if (!gb->StartingNewCode())		// if there is something in the buffer
+				input->Reset();
+				fileBeingPrinted.Close();
+
+				if (gb == fileGCode)
 				{
-					if (gb->Put('\n')) 			// in case there wasn't one ending the file
+					reprap.GetPrintMonitor()->StoppedPrint();
+					if (platform->Emulating() == marlin)
 					{
-						gb->SetFinished(ActOnCode(gb, reply));
-					}
-					else
-					{
-						gb->Init();
+						// Pronterface expects a "Done printing" message
+						HandleReply(gb, false, "Done printing file");
 					}
 				}
-				else if (AllMovesAreFinishedAndMoveBufferIsLoaded())
-				{
-					fileBeingPrinted.Close();
-					if (gb == fileGCode)
-					{
-						reprap.GetPrintMonitor()->StoppedPrint();
-						if (platform->Emulating() == marlin)
-						{
-							// Pronterface expects a "Done printing" message
-							HandleReply(gb, false, "Done printing file");
-						}
-					}
-				}
-				break;
 			}
 		}
 	}
@@ -476,73 +489,31 @@ void GCodes::Spin()
 // Get new data into the gcode buffers except the file and macro gcode buffers, and deal with any file uploading
 void GCodes::FillGCodeBuffers()
 {
-	// Webserver
+	// HTTP
 	if (httpGCode->IsIdle())
 	{
-		for (unsigned int i = 0; i < 16 && webserver->GCodeAvailable(WebSource::HTTP); ++i)
-		{
-			char b = webserver->ReadGCode(WebSource::HTTP);
-			if (httpGCode->Put(b))
-			{
-				// We have a complete gcode
-				if (httpGCode->WritingFileDirectory() != nullptr)
-				{
-					WriteGCodeToFile(httpGCode);
-					httpGCode->SetFinished(true);
-				}
-				break;
-			}
-		}
+		httpInput->FillBuffer(httpGCode);
 	}
 
 	// Telnet
 	if (telnetGCode->IsIdle())
 	{
-		for (unsigned int i = 0; i < GCODE_LENGTH && webserver->GCodeAvailable(WebSource::Telnet); ++i)
-		{
-			char b = webserver->ReadGCode(WebSource::Telnet);
-			if (telnetGCode->Put(b))
-			{
-				break;
-			}
-		}
+		telnetInput->FillBuffer(telnetGCode);
 	}
 
 	// USB interface
 	if (serialGCode->IsIdle())
 	{
-		for (unsigned int i = 0; i < 16 && platform->GCodeAvailable(SerialSource::USB); ++i)
-		{
-			char b = platform->ReadFromSource(SerialSource::USB);
-			// Check the special case of uploading the reprap.htm file
-			if (serialGCode->WritingFileDirectory() == platform->GetWebDir())
-			{
-				WriteHTMLToFile(b, serialGCode);
-			}
-			else if (serialGCode->Put(b))	// add char to buffer and test whether the gcode is complete
-			{
-				// We have a complete gcode
-				if (serialGCode->WritingFileDirectory() != nullptr)
-				{
-					WriteGCodeToFile(serialGCode);
-					serialGCode->SetFinished(true);
-				}
-				break;
-			}
-		}
+		serialInput->FillBuffer(serialGCode);
 	}
 
 	// Aux serial port (typically PanelDue)
 	if (auxGCode->IsIdle())
 	{
-		for (unsigned int i = 0; i < 16 && platform->GCodeAvailable(SerialSource::AUX); ++i)
+		if (auxInput->FillBuffer(auxGCode))
 		{
-			char b = platform->ReadFromSource(SerialSource::AUX);
-			if (auxGCode->Put(b))	// add char to buffer and test whether the gcode is complete
-			{
-				auxDetected = true;
-				break;
-			}
+			// by default we assume no PanelDue is attached
+			auxDetected = true;
 		}
 	}
 }
@@ -622,7 +593,7 @@ void GCodes::StartNextGCode(StringRef& reply)
 		auxGCode->SetFinished(ActOnCode(auxGCode, reply));
 	}
 	// Print some more of the current file
-	else
+	else if (fileBeingPrinted.IsLive())
 	{
 		DoFilePrint(fileGCode, reply);
 	}
@@ -712,6 +683,7 @@ void GCodes::DoPause(bool externalToFile)
 		{
 			fdata.Seek(fPos);											// replay the abandoned instructions if/when we resume
 		}
+		fileInput->Reset();
 		fileGCode->Init();
 		codeQueue->PurgeEntries(skippedMoves);
 
@@ -1698,10 +1670,7 @@ void GCodes::WriteHTMLToFile(char b, GCodeBuffer *gb)
 
 	if (eofStringCounter != 0 && b != eofString[eofStringCounter])
 	{
-		for (size_t i = 0; i < eofStringCounter; ++i)
-		{
-			fileBeingWritten->Write(eofString[i]);
-		}
+		fileBeingWritten->Write(eofString);
 		eofStringCounter = 0;
 	}
 
@@ -1720,6 +1689,8 @@ void GCodes::WriteHTMLToFile(char b, GCodeBuffer *gb)
 	}
 	else
 	{
+		// NB: This approach isn't very efficient, but I (chrishamm) think the whole uploading
+		// code should be rewritten anyway in the future and moved away from the GCodes class.
 		fileBeingWritten->Write(b);
 	}
 }
@@ -2985,7 +2956,7 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 				if (fileToPrint.IsLive())
 				{
 					reprap.GetPrintMonitor()->StartingPrint(filename);
-					if (platform->Emulating() == marlin && gb == serialGCode)
+					if (platform->Emulating() == marlin && (gb == serialGCode || gb == telnetGCode))
 					{
 						reply.copy("File opened\nFile selected");
 					}
@@ -3070,7 +3041,12 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 			}
 			else if (fileBeingPrinted.IsLive())
 			{
-				if (!fileBeingPrinted.Seek(value))
+				if (fileBeingPrinted.Seek(value))
+				{
+					FileGCodeInput *input = doingFileMacro ? fileMacroInput : fileInput;
+					input->Reset();
+				}
+				else
 				{
 					reply.copy("The specified SD position is invalid!");
 					error = true;
@@ -3101,7 +3077,7 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		if (reprap.GetPrintMonitor()->IsPrinting())
 		{
 			// Pronterface keeps sending M27 commands if "Monitor status" is checked, and it specifically expects the following response syntax
-			reply.printf("SD printing byte %lu/%lu", fileBeingPrinted.GetPosition(), fileBeingPrinted.Length());
+			reply.printf("SD printing byte %lu/%lu", fileBeingPrinted.GetPosition() - fileInput->BytesCached(), fileBeingPrinted.Length());
 		}
 		else
 		{
@@ -5724,11 +5700,42 @@ float GCodes::GetRawExtruderTotalByDrive(size_t extruder) const
 	return (extruder < (DRIVES - AXES)) ? rawExtruderTotalByDrive[extruder] : 0.0;
 }
 
+// How many bytes are left for a web-based G-code?
+size_t GCodes::GetGCodeBufferSpace(const WebSource input) const
+{
+	switch (input)
+	{
+		case WebSource::HTTP:
+			return httpInput->BufferSpaceLeft();
+
+		case WebSource::Telnet:
+			return telnetInput->BufferSpaceLeft();
+	}
+
+	return 0;
+}
+
+// Enqueue a null-terminated G-code for a web-based input source
+void GCodes::PutGCode(const WebSource source, const char *code)
+{
+	switch (source)
+	{
+		case WebSource::HTTP:
+			httpInput->Put(code);
+			break;
+
+		case WebSource::Telnet:
+			telnetInput->Put(code);
+			break;
+	}
+}
+
 // Cancel the current SD card print
 void GCodes::CancelPrint()
 {
 	moveAvailable = false;
 
+	fileInput->Reset();
 	fileGCode->Init();
 
 	if (fileBeingPrinted.IsLive())

@@ -32,10 +32,6 @@ Licence: GPL
 
 #include "lwipopts.h"
 
-/* Generic values */
-
-const size_t gcodeBufferLength = 512;			// size of our gcode ring buffer, preferably a power of 2
-
 /* HTTP */
 
 #define KO_START "rr_"
@@ -127,14 +123,9 @@ class Webserver
 	void Exit();
 	void Diagnostics(MessageType mtype);
 
-	bool GCodeAvailable(const WebSource source) const;
-	char ReadGCode(const WebSource source);
 	void HandleGCodeReply(const WebSource source, OutputBuffer *reply);
 	void HandleGCodeReply(const WebSource source, const char *reply);
 	uint32_t GetReplySeq() const;
-
-	// Returns the available G-Code buffer space of the HTTP interpreter (may be dropped in a future version)
-	uint16_t GetGCodeBufferSpace(const WebSource source) const;
 
 	void ConnectionLost(const ConnectionState *cs);
 	void ConnectionError();
@@ -158,11 +149,8 @@ class Webserver
 			bool DoingFastUpload() const override;
 			void DoFastUpload();
 
-			bool GCodeAvailable() const;
-			char ReadGCode();
 			void HandleGCodeReply(OutputBuffer *reply);
 			void HandleGCodeReply(const char *reply);
-			uint16_t GetGCodeBufferSpace() const;
 			uint32_t GetReplySeq() const;
 
 		private:
@@ -230,18 +218,9 @@ class Webserver
 			void UpdateAuthentication();
 			bool RemoveAuthentication();
 
-			// Deal with incoming G-Codes
-
-			char gcodeBuffer[gcodeBufferLength];
-			uint16_t gcodeReadIndex, gcodeWriteIndex;		// head and tail indices into gcodeBuffer
-			uint32_t seq;									// sequence number for G-Code replies
-
-			void LoadGcodeBuffer(const char* gc);
-			void ProcessGcode(const char* gc);
-			void StoreGcodeData(const char* data, uint16_t len);
-
 			// Responses from GCodes class
 
+			uint32_t seq;									// Sequence number for G-Code replies
 			OutputStack *gcodeReply;
 
 			// File uploads
@@ -284,7 +263,7 @@ class Webserver
 			uint8_t connectedClients;
 
 			char clientMessage[ftpMessageLength];
-			unsigned int clientPointer;
+			size_t clientPointer;
 
 			char filename[FILENAME_LENGTH];
 			char currentDir[FILENAME_LENGTH];
@@ -317,7 +296,6 @@ class Webserver
 			char ReadGCode();
 			void HandleGCodeReply(OutputBuffer *reply);
 			void HandleGCodeReply(const char *reply);
-			uint16_t GetGCodeBufferSpace() const;
 
 			void SendGCodeReply();
 
@@ -336,17 +314,9 @@ class Webserver
 
 			bool processNextLine;
 			char clientMessage[GCODE_LENGTH];
-			uint16_t clientPointer;
+			size_t clientPointer;
 
 			bool ProcessLine();
-
-			// Deal with incoming G-Codes
-
-			char gcodeBuffer[gcodeBufferLength];
-			uint16_t gcodeReadIndex, gcodeWriteIndex;		// head and tail indices into gcodeBuffer
-
-			void ProcessGcode(const char* gc);
-			void StoreGcodeData(const char* data, uint16_t len);
 
 			// Converted response from GCodes class (NL -> CRNL)
 
@@ -371,11 +341,6 @@ inline bool ProtocolInterpreter::IsUploading() const { return uploadState != not
 
 inline uint32_t Webserver::GetReplySeq() const { return httpInterpreter->GetReplySeq(); }
 
-inline uint16_t Webserver::HttpInterpreter::GetGCodeBufferSpace() const { return (gcodeReadIndex - gcodeWriteIndex - 1u) % gcodeBufferLength; }
-inline bool Webserver::HttpInterpreter::GCodeAvailable() const { return gcodeReadIndex != gcodeWriteIndex; }
 inline uint32_t Webserver::HttpInterpreter::GetReplySeq() const { return seq; }
-
-inline uint16_t Webserver::TelnetInterpreter::GetGCodeBufferSpace() const { return (gcodeReadIndex - gcodeWriteIndex - 1u) % gcodeBufferLength; }
-inline bool Webserver::TelnetInterpreter::GCodeAvailable() const { return gcodeReadIndex != gcodeWriteIndex; }
 
 #endif

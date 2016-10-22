@@ -22,6 +22,7 @@ Licence: GPL
 #ifndef GCODES_H
 #define GCODES_H
 
+#include "GCodeInput.h"
 #include "GCodeBuffer.h"
 #include "GCodeQueue.h"
 
@@ -137,6 +138,12 @@ public:
     float GetRawExtruderPosition(size_t drive) const;					// Get the actual extruder position, after adjusting the extrusion factor
     float GetRawExtruderTotalByDrive(size_t extruder) const;			// Get the total extrusion since start of print, for one drive
     float GetTotalRawExtrusion() const { return rawExtruderTotal; }		// Get the total extrusion since start of print, all drives
+
+	size_t GetGCodeBufferSpace(const WebSource input) const;			// How many bytes are left for a web-based G-code source?
+	void PutGCode(const WebSource source, const char *code);			// Enqueue a null-terminated G-code for a web-based source
+
+    void WriteGCodeToFile(GCodeBuffer *gb);								// Write this GCode into a file
+    void WriteHTMLToFile(char b, GCodeBuffer *gb);						// Save an HTML file (usually to upload a new web interface)
     
     bool HaveAux() const { return auxDetected; }						// Any device on the AUX line?
 	bool IsFlashing() const { return isFlashing; }						// Is a new firmware binary going to be flashed?
@@ -190,9 +197,7 @@ private:
 	void HandleReply(GCodeBuffer *gb, bool error, OutputBuffer *reply);
     bool OpenFileToWrite(const char* directory,							// Start saving GCodes in a file
     		const char* fileName, GCodeBuffer *gb);
-    void WriteGCodeToFile(GCodeBuffer *gb);								// Write this GCode into a file
     bool SendConfigToLine();											// Deal with M503
-    void WriteHTMLToFile(char b, GCodeBuffer *gb);						// Save an HTML file (usually to upload a new web interface)
     bool OffsetAxes(GCodeBuffer *gb);									// Set offsets - deprecated, use G10
     void SetPidParameters(GCodeBuffer *gb, int heater, StringRef& reply);	// Set the P/I/D parameters for a heater
     void SetHeaterParameters(GCodeBuffer *gb, StringRef& reply);		 // Set the thermistor and ADC parameters for a heater
@@ -211,6 +216,13 @@ private:
 
     Platform* platform;							// The RepRap machine
     Webserver* webserver;						// The webserver class
+
+	RegularGCodeInput* httpInput;				// These cache incoming G-codes...
+	RegularGCodeInput* telnetInput;				// ...
+	FileGCodeInput* fileInput;					// ...
+	StreamGCodeInput* serialInput;				// ...
+	StreamGCodeInput* auxInput;					// ...
+	FileGCodeInput* fileMacroInput;				// ...for the GCodeBuffers below
 
     GCodeBuffer* httpGCode;						// The sources...
 	GCodeBuffer* telnetGCode;					// ...
@@ -309,10 +321,10 @@ inline bool GCodes::DoingFileMacro() const
 inline bool GCodes::HaveIncomingData() const
 {
 	return fileBeingPrinted.IsLive() ||
-			webserver->GCodeAvailable(WebSource::HTTP) ||
-			webserver->GCodeAvailable(WebSource::Telnet) ||
-			platform->GCodeAvailable(SerialSource::USB) ||
-			platform->GCodeAvailable(SerialSource::AUX);
+			httpInput->BytesCached() != 0 ||
+			telnetInput->BytesCached() != 0 ||
+			serialInput->BytesCached() != 0 ||
+			auxInput->BytesCached() != 0;
 }
 
 inline bool GCodes::AllAxesAreHomed() const

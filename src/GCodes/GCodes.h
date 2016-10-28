@@ -308,6 +308,7 @@ private:
     // Firmware retraction settings
     float retractLength, retractExtra;			// retraction length and extra length to un-retract
     float retractSpeed;							// retract speed in mm/min
+    float unRetractSpeed;						// un=retract speed in mm/min
     float retractHop;							// Z hop when retracting
 
     // Triggers

@@ -108,6 +108,7 @@ const unsigned int FirstRtdChannel = 200;			// Temperature sensor channels 200..
 const unsigned int SlowHeaterPwmFreq = 10;			// slow PWM frequency for bed and chamber heaters, compatible with DC/AC SSRs
 const unsigned int NormalHeaterPwmFreq = 250;		// normal PWM frequency used for hot ends
 const unsigned int DefaultFanPwmFreq = 250;			// increase to 25kHz using M106 command to meet Intel 4-wire PWM fan specification
+const unsigned int DefaultPinWritePwmFreq = 500;	// default PWM frequency for M42 pin writes
 
 // Default Z probe values
 

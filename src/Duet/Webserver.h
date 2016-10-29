@@ -225,6 +225,7 @@ class Webserver
 
 			// File uploads
 			uint32_t postFileLength, uploadedBytes;			// How many POST bytes do we expect and how many have already been written?
+			time_t fileLastModified;
 
 			// Deferred requests (rr_fileinfo)
 			ConnectionState * volatile deferredRequestConnection;	// Which connection expects a response for a deferred request?

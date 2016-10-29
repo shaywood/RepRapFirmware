@@ -41,6 +41,7 @@ Licence: GPL
 #include <malloc.h>
 #include <cstdlib>
 #include <climits>
+#include <ctime>
 
 // Platform-specific includes
 
@@ -236,19 +237,6 @@ enum class DiagnosticTestType : int
 	TestSpinLockup = 1002,			// test that we get a software reset if a Spin() function takes too long
 	TestSerialBlock = 1003,			// test what happens when we write a blocking message via debugPrintf()
 	PrintMoves = 100				// print summary of recent moves
-};
-
-// Info returned by FindFirst/FindNext calls
-class FileInfo
-{
-public:
-
-	bool isDirectory;
-	unsigned long size;
-	uint8_t day;
-	uint8_t month;
-	uint16_t year;
-	char fileName[FILENAME_LENGTH];
 };
 
 /***************************************************************************************************************/
@@ -450,6 +438,14 @@ public:
 	static bool ScheduleInterrupt(uint32_t tim);	// Schedule an interrupt at the specified clock count, or return true if it has passed already
 	static void DisableStepInterrupt();				// Make sure we get no step interrupts
 	void Tick();
+
+	// Real-time clock
+
+	bool IsDateTimeSet() const;						// Has the RTC been set yet?
+	time_t GetDateTime() const;						// Retrieves the current RTC datetime and returns true if it's valid
+	bool SetDateTime(time_t time);					// Sets the current RTC date and time or returns false on error
+	bool SetDate(time_t date);						// Sets the current RTC date or returns false on error
+	bool SetTime(time_t time);						// Sets the current RTC time or returns false on error
   
   	// Communications and data storage
   

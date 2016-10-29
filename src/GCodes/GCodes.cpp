@@ -580,10 +580,6 @@ void GCodes::StartNextGCode(StringRef& reply)
 	{
 		auxGCode->SetFinished(ActOnCode(auxGCode, reply));
 	}
-	else if (fileGCode->IsExecuting())
-	{
-		fileGCode->SetFinished(ActOnCode(fileGCode, reply));
-	}
 	// Check triggers
 	else if (CheckTriggers())
 	{
@@ -606,7 +602,12 @@ void GCodes::StartNextGCode(StringRef& reply)
 	{
 		auxGCode->SetFinished(ActOnCode(auxGCode, reply));
 	}
-	// Print some more of the current file
+	// Print some more of the current file.
+	// Do this last so certain codes like M116 can be interrupted.
+	else if (fileGCode->IsExecuting())
+	{
+		fileGCode->SetFinished(ActOnCode(fileGCode, reply));
+	}
 	else if (fileBeingPrinted.IsLive())
 	{
 		DoFilePrint(fileGCode, reply);
@@ -5431,6 +5432,75 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 				for (size_t axis = 0; axis < numAxes; ++axis)
 				{
 					reply.catf(" %c:%f", axisLetters[axis], move->GetCoreAxisFactor(axis));
+				}
+			}
+		}
+		break;
+
+	case 905: // Set current RTC date and time
+		{
+			time_t now = platform->GetDateTime();
+			struct tm *timeInfo = localtime(&now);
+			bool seen = false;
+
+			if (gb->Seen('P'))
+			{
+				// Set date
+				const char *dateString = gb->GetString();
+				if (strptime(dateString, "%Y-%m-%d", timeInfo) != nullptr)
+				{
+					if (!platform->SetDate(mktime(timeInfo)))
+					{
+						reply.copy("Could not set date");
+						error = true;
+						break;
+					}
+				}
+				else
+				{
+					reply.copy("Invalid date format");
+					error = true;
+					break;
+				}
+
+				seen = true;
+			}
+
+			if (gb->Seen('S'))
+			{
+				// Set time
+				const char *timeString = gb->GetString();
+				if (strptime(timeString, "%H:%M:%S", timeInfo) != nullptr)
+				{
+					if (!platform->SetTime(mktime(timeInfo)))
+					{
+						reply.copy("Could not set time");
+						error = true;
+						break;
+					}
+				}
+				else
+				{
+					reply.copy("Invalid time format");
+					error = true;
+					break;
+				}
+
+				seen = true;
+			}
+
+			// TODO: Add correction parameters for SAM4E
+
+			if (!seen)
+			{
+				// Report current date and time
+				reply.printf("Current date and time: %04u-%02u-%02u %02u:%02u:%02u",
+						timeInfo->tm_year + 1900, timeInfo->tm_mon + 1, timeInfo->tm_mday,
+						timeInfo->tm_hour, timeInfo->tm_min, timeInfo->tm_sec);
+
+				if (!platform->IsDateTimeSet())
+				{
+					reply.cat("\nWarning: RTC has not been configured yet!");
 				}
 			}
 		}

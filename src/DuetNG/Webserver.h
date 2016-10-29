@@ -56,13 +56,9 @@ public:
 	void Exit();
 	void Diagnostics(MessageType mtype);
 
-	bool GCodeAvailable(const WebSource source) const;
-	char ReadGCode(const WebSource source);
 	void HandleGCodeReply(const WebSource source, OutputBuffer *reply);
 	void HandleGCodeReply(const WebSource source, const char *reply);
 	uint32_t GetReplySeq() const { return seq; }
-	// Returns the available G-Code buffer space of the HTTP interpreter (may be dropped in a future version)
-	uint16_t GetGCodeBufferSpace(const WebSource source) const { return 0; }
 
 private:
 	static const uint32_t lastFragmentFlag = 0x80000000;
@@ -87,6 +83,8 @@ private:
 		uint32_t nextFragment;
 		uint32_t lastQueryTime;
 		FileData fileBeingUploaded;
+		char filenameBeingUploaded[FILENAME_LENGTH];
+		time_t fileLastModified;
 		uint32_t postLength;
 		uint32_t bytesWritten;
 		UploadState uploadState;
@@ -101,22 +99,15 @@ private:
 	bool CharFromClient(char c, const char* &error);
 	bool ProcessFirstFragment(HttpSession& session, const char* command, bool isOnlyFragment);
 	void ProcessUploadFragment(HttpSession& session, const char* request, size_t length, uint32_t fragment);
-	void StartUpload(HttpSession& session, const char* fileName, uint32_t fileLength);
+	void StartUpload(HttpSession& session, const char* fileName, uint32_t fileLength, time_t lastModified);
 	void FinishUpload(HttpSession& session);
 	void CancelUpload(HttpSession& session);
 	bool GetJsonResponse(uint32_t remoteIp, const char* request, OutputBuffer *&response, const char* key, const char* value, size_t valueLength, bool& keepOpen);
 	void SendFile(const char* nameOfFileToSend, HttpSession& session);
 
-	// Deal with incoming G-Codes
-	char gcodeBuffer[gcodeBufferLength];
-	uint16_t gcodeReadIndex, gcodeWriteIndex;		// head and tail indices into gcodeBuffer
 	uint32_t seq;									// sequence number for G-Code replies
 
-	void LoadGcodeBuffer(const char* gc);
-	void ProcessGcode(const char* gc);
-	void StoreGcodeData(const char* data, uint16_t len);
 	void SendGCodeReply(HttpSession& session);
-	uint16_t GetGCodeBufferSpace() const;
 
 	HttpSession *StartSession(uint32_t ip);			// start a new session for this requester
 	HttpSession *FindSession(uint32_t ip);			// find an existing session for this requester
@@ -162,10 +153,5 @@ private:
 	HttpSession sessions[maxHttpSessions];
 	size_t numSessions, clientsServed;
 };
-
-inline uint16_t Webserver::GetGCodeBufferSpace() const
-{
-	return (gcodeReadIndex - gcodeWriteIndex - 1u) % gcodeBufferLength;
-}
 
 #endif

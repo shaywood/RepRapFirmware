@@ -27,9 +27,11 @@
 
  The supported requests are GET requests for files (for which the root is the www directory on the
  SD card), and the following. These all start with "/rr_". Ordinary files used for the web interface
- must not have names starting "/rr_" or they will not be found.
+ must not have names starting "/rr_" or they will not be found. Times should be generally specified
+ in the format YYYY-MM-DDTHH:MM:SS so the firmware can parse them.
 
- rr_connect?password=xxx
+
+ rr_connect?password=xxx&time=yyy
              Sent by the web interface software to establish an initial connection, indicating that
  	 	 	 any state variables relating to the web interface (e.g. file upload in progress) should
  	 	 	 be reset. This only happens if the password could be verified.
@@ -64,7 +66,7 @@
  rr_download?name=xxx
 			 Download a specified file from the SD card
 
- rr_upload?name=xxx
+ rr_upload?name=xxx&time=yyy
  	 	 	 Upload a specified file using a POST request. The payload of this request has to be
  	 	 	 the file content. Only one file may be uploaded at once. When the upload has finished,
  	 	 	 a JSON response with the variable "err" will be returned, which will be 0 if the job
@@ -89,7 +91,6 @@ const char* badEscapeResponse = "bad escape";
 // Constructor and initialisation
 Webserver::Webserver(Platform* p, Network *n) : state(doingFilename), platform(p), network(n), numSessions(0), clientsServed(0)
 {
-	gcodeReadIndex = gcodeWriteIndex = 0;
 	gcodeReply = new OutputStack();
 	processingDeferredRequest = false;
 	seq = 0;
@@ -180,7 +181,7 @@ void Webserver::Spin()
 }
 
 // This is called to process a file upload request.
-void Webserver::StartUpload(HttpSession& session, const char* fileName, uint32_t fileLength)
+void Webserver::StartUpload(HttpSession& session, const char* fileName, uint32_t fileLength, time_t lastModified)
 {
 	CancelUpload(session);
 	if (uploadIp != 0)
@@ -197,6 +198,8 @@ void Webserver::StartUpload(HttpSession& session, const char* fileName, uint32_t
 		else
 		{
 			session.fileBeingUploaded.Set(file);
+			strncpy(session.filenameBeingUploaded, fileName, FILENAME_LENGTH);
+			session.fileLastModified = lastModified;
 			session.postLength = fileLength;
 			session.bytesWritten = 0;
 			session.nextFragment = 1;
@@ -222,6 +225,11 @@ void Webserver::FinishUpload(HttpSession& session)
 		else if (session.bytesWritten != session.postLength)
 		{
 			session.uploadState = wrongLength;
+		}
+		else if (session.fileLastModified != 0)
+		{
+			// Upload OK, update the file timestamp if it was specified before
+			platform->GetMassStorage()->SetLastModifiedTime(session.filenameBeingUploaded, session.fileLastModified);
 		}
 	}
 
@@ -409,42 +417,6 @@ void Webserver::Diagnostics(MessageType mtype)
 	platform->MessageF(mtype, "HTTP sessions: %d of %d\n", numSessions, maxHttpSessions);
 }
 
-bool Webserver::GCodeAvailable(const WebSource source) const
-{
-	switch (source)
-	{
-	case WebSource::HTTP:
-		return gcodeReadIndex != gcodeWriteIndex;
-
-	case WebSource::Telnet:
-		// Telnet not supported
-		return false;
-	}
-
-	return false;
-}
-
-char Webserver::ReadGCode(const WebSource source)
-{
-	switch (source)
-	{
-	case WebSource::HTTP:
-		if (gcodeReadIndex != gcodeWriteIndex)
-		{
-			char c = gcodeBuffer[gcodeReadIndex];
-			gcodeReadIndex = (gcodeReadIndex + 1u) % gcodeBufferLength;
-			return c;
-		}
-		break;
-
-	case WebSource::Telnet:
-		// Telnet not supported
-		return 0;
-	}
-
-	return 0;
-}
-
 void Webserver::HandleGCodeReply(const WebSource source, OutputBuffer *reply)
 {
 	switch (source)
@@ -485,8 +457,6 @@ void Webserver::HandleGCodeReply(const WebSource source, const char *reply)
 	switch (source)
 	{
 	case WebSource::HTTP:
-#if 0
-#else
 		if (numSessions > 0)
 		{
 			OutputBuffer *buffer = gcodeReply->GetLastItem();
@@ -503,7 +473,6 @@ void Webserver::HandleGCodeReply(const WebSource source, const char *reply)
 			buffer->cat(reply);
 			seq++;
 		}
-#endif
 		break;
 
 	case WebSource::Telnet:
@@ -532,7 +501,18 @@ bool Webserver::ProcessFirstFragment(HttpSession& session, const char* command, 
 		{
 			if (session.isAuthenticated || reprap.CheckPassword(value1))
 			{
-				// Password OK
+				// Password is OK, see if we can update the current RTC date and time
+				if (StringEquals(key2, "time") && !platform->IsDateTimeSet())
+				{
+					struct tm timeInfo;
+					if (strptime(qualifiers[1].value, "%Y-%m-%dT%H:%M:%S", &timeInfo) != nullptr)
+					{
+						time_t newTime = mktime(&timeInfo);
+						platform->SetDateTime(newTime);
+					}
+				}
+
+				// Client has logged in
 				session.isAuthenticated = true;
 				response->printf("{\"err\":0,\"sessionTimeout\":%u,\"boardType\":\"%s\"}", httpSessionTimeout, platform->GetBoardString());
 			}
@@ -596,11 +576,36 @@ bool Webserver::ProcessFirstFragment(HttpSession& session, const char* command, 
 
 	if (StringEquals(command, "upload"))
 	{
-		if (StringEquals(key1, "name") && StringEquals(key2, "length"))
+		const char *name = nullptr;
+		uint32_t fileLength = 0;
+		bool fileLengthSet = false;
+		time_t fileLastModified = 0;
+
+		for(size_t i = 0; i < numQualKeys; i++)
+		{
+			if (StringEquals(qualifiers[i].key, "name"))
+			{
+				name = qualifiers[i].value;
+			}
+			else if (StringEquals(qualifiers[i].key, "length"))
+			{
+				fileLength = atol(qualifiers[i].value);
+				fileLengthSet = true;
+			}
+			else if (StringEquals(qualifiers[i].key, "time"))
+			{
+				struct tm timeInfo;
+				if (strptime(qualifiers[i].value, "%Y-%m-%dT%H:%M:%S", &timeInfo) != nullptr)
+				{
+					fileLastModified = mktime(&timeInfo);
+				}
+			}
+		}
+
+		if (name != nullptr && fileLengthSet)
 		{
 			// Deal with file upload request
-			uint32_t fileLength = atol(value2);
-			StartUpload(session, value1, fileLength);
+			StartUpload(session, name, fileLength, fileLastModified);
 			if (session.uploadState == uploading)
 			{
 				if (isOnlyFragment)
@@ -690,10 +695,10 @@ bool Webserver::ProcessFirstFragment(HttpSession& session, const char* command, 
 	{
 		if (StringEquals(key1, "gcode"))
 		{
-			LoadGcodeBuffer(value1);
+			reprap.GetGCodes()->PutGCode(WebSource::HTTP, value1);
 			if (OutputBuffer::Allocate(response))
 			{
-				response->printf("{\"buff\":%u}", GetGCodeBufferSpace());
+				response->printf("{\"buff\":%u}", reprap.GetGCodes()->GetGCodeBufferSpace(WebSource::HTTP));
 			}
 		}
 		else
@@ -971,98 +976,6 @@ void Webserver::CheckSessions()
 			OutputBuffer::ReleaseAll(gcodeReply->Pop());
 		}
 		clientsServed = 0;
-	}
-}
-
-// Process a received string of gcodes
-void Webserver::LoadGcodeBuffer(const char* gc)
-{
-	char gcodeTempBuf[GCODE_LENGTH];
-	uint16_t gtp = 0;
-	bool inComment = false;
-	for (;;)
-	{
-		char c = *gc++;
-		if (c == 0)
-		{
-			gcodeTempBuf[gtp] = 0;
-			ProcessGcode(gcodeTempBuf);
-			return;
-		}
-
-		if (c == '\n')
-		{
-			gcodeTempBuf[gtp] = 0;
-			ProcessGcode(gcodeTempBuf);
-			gtp = 0;
-			inComment = false;
-		}
-		else
-		{
-			if (c == ';')
-			{
-				inComment = true;
-			}
-
-			if (gtp == ARRAY_UPB(gcodeTempBuf))
-			{
-				// gcode is too long, we haven't room for another character and a null
-				if (c != ' ' && !inComment)
-				{
-					platform->Message(HOST_MESSAGE, "Error: GCode local buffer overflow in HTTP webserver.\n");
-					return;
-				}
-				// else we're either in a comment or the current character is a space.
-				// If we're in a comment, we'll silently truncate it.
-				// If the current character is a space, we'll wait until we see a non-comment character before reporting an error,
-				// in case the next character is end-of-line or the start of a comment.
-			}
-			else
-			{
-				gcodeTempBuf[gtp++] = c;
-			}
-		}
-	}
-}
-
-// Process a null-terminated gcode
-// We intercept one M Codes so we can deal with emergencies.  That
-// way things don't get out of sync, and - as a file name can contain
-// a valid G code (!) - confusion is avoided.
-void Webserver::ProcessGcode(const char* gc)
-{
-	if (StringStartsWith(gc, "M112") && !isdigit(gc[4]))	// emergency stop
-	{
-		reprap.EmergencyStop();
-		gcodeReadIndex = gcodeWriteIndex;					// clear the buffer
-		reprap.GetGCodes()->Reset();
-	}
-	else
-	{
-		StoreGcodeData(gc, strlen(gc) + 1);
-	}
-}
-
-// Process a received string of gcodes
-void Webserver::StoreGcodeData(const char* data, uint16_t len)
-{
-	if (len > GetGCodeBufferSpace())
-	{
-		platform->Message(HOST_MESSAGE, "Error: GCode buffer overflow in HTTP Webserver!\n");
-	}
-	else
-	{
-		uint16_t remaining = gcodeBufferLength - gcodeWriteIndex;
-		if (len <= remaining)
-		{
-			memcpy(gcodeBuffer + gcodeWriteIndex, data, len);
-		}
-		else
-		{
-			memcpy(gcodeBuffer + gcodeWriteIndex, data, remaining);
-			memcpy(gcodeBuffer, data + remaining, len - remaining);
-		}
-		gcodeWriteIndex = (gcodeWriteIndex + len) % gcodeBufferLength;
 	}
 }
 

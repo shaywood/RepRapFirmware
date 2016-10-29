@@ -11,20 +11,20 @@ OUTPUT_PATH := $(PWD)/../Release/Duet-WiFi
 
 # Firmware port for 1200bps touch
 PRIMARY_PORT := /dev/ttyACM0
-SECONDARYL_PORT := /dev/ttyACM1
+SECONDARY_PORT := /dev/ttyACM1
 
 
 # Set Arduino Duet core options
 DRIVERS := wdt usart udp uart twi tc supc spi rtt rtc rstc pwm pmc pio pdc matrix hsmci gpbr efc dmac dacc chipid can afec
 INCLUDES := -I"$(DUET_BOARD_PATH)/cores/arduino" -I"$(DUET_BOARD_PATH)/asf" -I"$(DUET_BOARD_PATH)/asf/sam/utils" -I"$(DUET_BOARD_PATH)/asf/sam/utils/header_files" -I"$(DUET_BOARD_PATH)/asf/sam/utils/preprocessor" -I"$(DUET_BOARD_PATH)/asf/sam/utils/cmsis/sam4e/include" -I"$(DUET_BOARD_PATH)/asf/sam/drivers" $(foreach driver,$(DRIVERS),-I"$(DUET_BOARD_PATH)/asf/sam/drivers/$(driver)") -I"$(DUET_BOARD_PATH)/asf/sam/services/flash_efc" -I"$(DUET_BOARD_PATH)/asf/common/utils" -I"$(DUET_BOARD_PATH)/asf/common/services/clock" -I"$(DUET_BOARD_PATH)/asf/common/services/ioport" -I"$(DUET_BOARD_PATH)/asf/common/services/sleepmgr" -I"$(DUET_BOARD_PATH)/asf/common/services/usb" -I"$(DUET_BOARD_PATH)/asf/common/services/usb/udc" -I"$(DUET_BOARD_PATH)/asf/common/services/usb/class/cdc" -I"$(DUET_BOARD_PATH)/asf/common/services/usb/class/cdc/device" -I"$(DUET_BOARD_PATH)/asf/thirdparty/CMSIS/Include" -I"$(DUET_BOARD_PATH)/variants/duetNG"
-INCLUDES += -I"$(DUET_LIBRARY_PATH)/SharedSpi" -I"$(DUET_LIBRARY_PATH)/Storage" -I"$(DUET_LIBRARY_PATH)/Wire"
+INCLUDES += -I"$(DUET_LIBRARY_PATH)/Flash" -I"$(DUET_LIBRARY_PATH)/RTCDue" -I"$(DUET_LIBRARY_PATH)/SharedSpi" -I"$(DUET_LIBRARY_PATH)/Storage" -I"$(DUET_LIBRARY_PATH)/Wire"
 
 # Set board options
 INCLUDES += -I"$(PWD)" -I"$(PWD)/DuetNG"
 
 # Get source files
 VPATH := $(PWD) $(PWD)/DuetNG $(PWD)/GCodes $(PWD)/Heating $(PWD)/Movement $(PWD)/Storage
-VPATH += $(PWD)/Libraries/Fatfs $(PWD)/Libraries/Flash $(PWD)/Libraries/General $(PWD)/Libraries/Math $(PWD)/Libraries/MCP4461 $(PWD)/Libraries/TemperatureSensor $(PWD)/Libraries/sha1
+VPATH += $(PWD)/Libraries/Fatfs $(PWD)/Libraries/General $(PWD)/Libraries/Math $(PWD)/Libraries/MCP4461 $(PWD)/Libraries/TemperatureSensor $(PWD)/Libraries/sha1
 
 C_SOURCES += $(foreach dir,$(VPATH),$(wildcard $(dir)/*.c)) $(wildcard $(PWD)/*.c)
 CPP_SOURCES := $(foreach dir,$(VPATH),$(wildcard $(dir)/*.cpp)) $(wildcard $(PWD)/*.cpp)
@@ -76,7 +76,7 @@ $(OUTPUT_PATH):
 .PHONY += clean
 clean:
 	@rm -rf $(BUILD_PATH) $(OUTPUT_PATH)/DuetWiFiFirmware-*.bin
-	$(info DuetNG build directories removed.)
+	$(info DuetNG firmware builds removed.)
 
 
 # ================================= Target upload ===================================
@@ -84,8 +84,8 @@ clean:
 upload: $(OUTPUT_PATH)/DuetWiFiFirmware-$(VERSION).bin
 	@echo "=> Rebooting hardware into bootloader mode..."
 	@stty -F $(PRIMARY_PORT) 115200 -ixon crtscts || true
-	@echo -n "M999 PERASE" > $(PRIMARY_PORT) || true
-	@sleep 1
+	@echo "M999 PERASE" > $(PRIMARY_PORT) || true
+	@sleep 2
 	@echo "=> Flashing new firmware binary..."
 	@cp $(OUTPUT_PATH)/DuetWiFiFirmware-$(VERSION).bin $(OUTPUT_PATH)/DuetWiFiFirmware.bin
 	@test -s $(PRIMARY_PORT) || $(BOSSAC_4E_PATH) $(PRIMARY_PORT) at91sam4e8-ek ./DuetNG/flash.txt || true

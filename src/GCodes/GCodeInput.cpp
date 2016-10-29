@@ -140,8 +140,9 @@ void RegularGCodeInput::Put(const char c)
 			{
 				// ignore comments if possible
 				state = GCodeInputState::inComment;
+				break;
 			}
-			break;
+			// no break
 
 		case GCodeInputState::inComment:
 			if (c == 0 || c == '\r' || c == '\n')
@@ -179,8 +180,7 @@ void RegularGCodeInput::Put(const char c)
 				reprap.GetGCodes()->Reset();
 
 				// But don't run it twice
-				readingPointer = (readingPointer + 5) % GCodeInputBufferSize;
-				state = GCodeInputState::idle;
+				Reset();
 				return;
 			}
 
@@ -201,7 +201,7 @@ void RegularGCodeInput::Put(const char c)
 
 void RegularGCodeInput::Put(const char *buf)
 {
-	Put(buf, strlen(buf));
+	Put(buf, strlen(buf) + 1);
 }
 
 void RegularGCodeInput::Put(const char *buf, size_t len)
@@ -216,16 +216,11 @@ void RegularGCodeInput::Put(const char *buf, size_t len)
 	{
 		Put(buf[i]);
 	}
-	Put((char)0);
 }
 
 size_t RegularGCodeInput::BufferSpaceLeft() const
 {
-	if (readingPointer > writingPointer)
-	{
-		return readingPointer - writingPointer;
-	}
-	return GCodeInputBufferSize - writingPointer + readingPointer;
+	return (readingPointer - writingPointer - 1u) % GCodeInputBufferSize;
 }
 
 
@@ -259,7 +254,7 @@ bool FileGCodeInput::ReadFromFile(FileData &file)
 	lastFile = file.f;
 
 	// Read more from the file
-	if (file.IsLive() && bytesCached < GCodeInputFileReadThreshold)
+	if (bytesCached < GCodeInputFileReadThreshold)
 	{
 		// Reset the read+write pointers for better performance if possible
 		if (readingPointer == writingPointer)
@@ -267,15 +262,6 @@ bool FileGCodeInput::ReadFromFile(FileData &file)
 			readingPointer = writingPointer = 0;
 		}
 
-		/*** This code isn't working yet ***
-		 * If the file.Read() call is replaced by a dumb routine to fill up the buffer with lots of "M83\n",
-		 * the firmware loads normally, however if one of the two blocks below is activated, doingFileMacro
-		 * in the GCodes class is set to "false" without any good reason - possibly by a race condition and/or
-		 * by a memory fault, and despite several debugging attempts I (chrishamm) have not yet been able to
-		 * figure out why this is happening. In addition adding debug messages with some delay() calls seems
-		 * to "resolve" the problem which makes the whole issue even worse to diagnose... */
-
-#if 1
 		// Read blocks with sizes multiple of 4 for HSMCI efficiency
 		uint32_t readBuffer32[(GCodeInputBufferSize + 3) / 4];
 		char * const readBuffer = reinterpret_cast<char * const>(readBuffer32);
@@ -283,86 +269,20 @@ bool FileGCodeInput::ReadFromFile(FileData &file)
 		int bytesRead = file.Read(readBuffer, BufferSpaceLeft() & (~3));
 		if (bytesRead > 0)
 		{
-			if (writingPointer + bytesRead <= GCodeInputBufferSize)
+			int remaining = GCodeInputBufferSize - writingPointer;
+			if (bytesRead <= remaining)
 			{
 				memcpy(buffer + writingPointer, readBuffer, bytesRead);
-				writingPointer += bytesRead;
 			}
 			else
 			{
-				size_t bytesAtEnd = GCodeInputBufferSize - writingPointer;
-				memcpy(buffer + writingPointer, readBuffer, bytesAtEnd);
-				writingPointer = bytesRead - bytesAtEnd;
-				memcpy(buffer, readBuffer + bytesAtEnd, writingPointer);
+				memcpy(buffer + writingPointer, readBuffer, remaining);
+				memcpy(buffer, readBuffer + remaining, bytesRead - remaining);
 			}
+			writingPointer = (writingPointer + bytesRead) % GCodeInputBufferSize;
 
 			return true;
 		}
-#else
-#if 0
-		// Realign the remaining data and read more from the file
-		if (readingPointer != 0)
-		{
-			// Any data left at the end of the circular buffer?
-			if (writingPointer < readingPointer)
-			{
-				// Yes - realign both segments at the end and at the beginning
-				size_t bytesAtEnd = GCodeInputBufferSize - readingPointer;
-				memmove(buffer + bytesAtEnd, buffer, bytesCached - bytesAtEnd);
-				memmove(buffer, buffer + readingPointer, bytesAtEnd);
-			}
-			else
-			{
-				// No - we can realign the whole segment in one go
-				memmove(buffer, buffer + readingPointer, bytesCached);
-			}
-
-			readingPointer = 0;
-			writingPointer = bytesCached;
-		}
-
-		// Read blocks with sizes multiple of 4 for HSMCI efficiency
-		int bytesRead = file.Read(buffer + writingPointer, BufferSpaceLeft() & (~3));
-		if (bytesRead > 0)
-		{
-			writingPointer += bytesRead;
-			return true;
-		}
-#else
-		// TEST CASE: Create a dummy buffer and fill it up with lots of 'M83\n' codes.
-		// This appears to be working even though the passages above create problems.
-		// To verify it does work, debug should be enabled on boot in RepRap.cpp.
-		uint32_t readBuffer32[(GCodeInputBufferSize + 3) / 4];
-		char * const readBuffer = reinterpret_cast<char * const>(readBuffer32);
-
-		size_t bytesRead = BufferSpaceLeft() & (~3);
-		for(size_t i = 0; i < bytesRead / 4; i++)
-		{
-			readBuffer[i * 4] = 'M';
-			readBuffer[i * 4 + 1] = '8';
-			readBuffer[i * 4 + 2] = '3';
-			readBuffer[i * 4 + 3] = '\n';
-		}
-
-		if (bytesRead > 0)
-		{
-			if (writingPointer + bytesRead <= GCodeInputBufferSize)
-			{
-				memcpy(buffer + writingPointer, readBuffer, bytesRead);
-				writingPointer += bytesRead;
-			}
-			else
-			{
-				size_t bytesAtEnd = GCodeInputBufferSize - writingPointer;
-				memcpy(buffer + writingPointer, readBuffer, bytesAtEnd);
-				writingPointer = bytesRead - bytesAtEnd;
-				memcpy(buffer, readBuffer + bytesAtEnd, writingPointer);
-			}
-
-			return true;
-		}
-#endif
-#endif
 	}
 
 	return bytesCached > 0;

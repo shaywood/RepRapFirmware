@@ -25,6 +25,7 @@ Licence: GPL
 #include <cstddef>		// for size_t
 #include <cfloat>
 #include <cstdarg>
+#include <ctime>
 
 #include "Arduino.h"
 #include "Configuration.h"
@@ -75,7 +76,7 @@ bool StringEndsWith(const char* string, const char* ending);
 bool StringStartsWith(const char* string, const char* starting);
 bool StringEquals(const char* s1, const char* s2);
 int StringContains(const char* string, const char* match);
-  
+
 // Macro to assign an array from an initializer list
 #define ARRAY_INIT(_dest, _init) static_assert(sizeof(_dest) == sizeof(_init), "Incompatible array types"); memcpy(_dest, _init, sizeof(_init));
 

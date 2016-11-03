@@ -647,7 +647,7 @@ void Webserver::HttpInterpreter::DoFastUpload()
 		// Update the file timestamp if it was specified before
 		if (fileLastModified != 0)
 		{
-			platform->GetMassStorage()->SetLastModifiedTime(filename, fileLastModified);
+			(void)platform->GetMassStorage()->SetLastModifiedTime(filename, fileLastModified);
 		}
 
 		// Eventually send the JSON response

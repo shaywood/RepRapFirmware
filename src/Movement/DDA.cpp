@@ -160,7 +160,7 @@ bool DDA::Init(const GCodes::RawMove &nextMove, bool doMotorMapping)
 		}
 
 		endCoordinates[drive] = nextMove.coords[drive];
-		int32_t delta = (drive < numAxes) ? endPoint[drive] - positionNow[drive] : endPoint[drive];
+		const int32_t delta = (drive < numAxes) ? endPoint[drive] - positionNow[drive] : endPoint[drive];
 
 		DriveMovement& dm = ddm[drive];
 		if (drive < numAxes && !isSpecialDeltaMove)

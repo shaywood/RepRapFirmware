@@ -457,7 +457,7 @@ public:
 	bool SetDateTime(time_t time);					// Sets the current RTC date and time or returns false on error
 	bool SetDate(time_t date);						// Sets the current RTC date or returns false on error
 	bool SetTime(time_t time);						// Sets the current RTC time or returns false on error
-  
+
   	// Communications and data storage
   
 	OutputBuffer *GetAuxGCodeReply();				// Returns cached G-Code reply for AUX devices and clears its reference

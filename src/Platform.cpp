@@ -1442,8 +1442,8 @@ void Platform::Diagnostics(MessageType mtype)
 #endif
 
 	// Show current RTC time
-	time_t timeNow = RTCDue::GetDateTime();
-	struct tm *timeInfo = localtime(&timeNow);
+	const time_t timeNow = RTCDue::GetDateTime();
+	const struct tm * const timeInfo = localtime(&timeNow);
 	MessageF(mtype, "Current date and time: %04u-%02u-%02u %02u:%02u:%02u\n",
 			timeInfo->tm_year + 1900, timeInfo->tm_mon + 1, timeInfo->tm_mday,
 			timeInfo->tm_hour, timeInfo->tm_min, timeInfo->tm_sec);

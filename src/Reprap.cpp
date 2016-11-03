@@ -1,4 +1,5 @@
 #include "RepRapFirmware.h"
+#include <ctime>
 
 // RepRap member functions.
 
@@ -1352,7 +1353,7 @@ OutputBuffer *RepRap::GetFilelistResponse(const char *dir)
 		if (fileInfo.fileName[0] != '.')			// ignore Mac resource files and Linux hidden files
 		{
 			// Make sure we can end this response properly
-			if (bytesLeft < strlen(fileInfo.fileName) + 70)
+			if (bytesLeft < strlen(fileInfo.fileName) + 80)
 			{
 				// No more space available - stop here
 				break;

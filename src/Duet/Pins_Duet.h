@@ -138,7 +138,7 @@ const Pin ROLAND_RTS_PIN = 17;											// Expansion pin 12, PA13_RXD1
 const Pin SpecialPinMap[] =
 {
 	19, 18,	17, 16, 23, 	// PA10/RXD0 PA11/TXD0 PA12/RXD1 PA13/TXD1 PA14/RTS1
-	20, 21, 52, 			// PB12/TWD1 PB13/TWCK1 PB21/AD14
+	20, 21, 67, 52, 		// PB12/TWD1 PB13/TWCK1 PB16/DAC1 PB21/AD14
 	36						// PC4
 };
 

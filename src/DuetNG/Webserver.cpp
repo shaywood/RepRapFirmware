@@ -30,7 +30,6 @@
  must not have names starting "/rr_" or they will not be found. Times should be generally specified
  in the format YYYY-MM-DDTHH:MM:SS so the firmware can parse them.
 
-
  rr_connect?password=xxx&time=yyy
              Sent by the web interface software to establish an initial connection, indicating that
  	 	 	 any state variables relating to the web interface (e.g. file upload in progress) should
@@ -229,7 +228,7 @@ void Webserver::FinishUpload(HttpSession& session)
 		else if (session.fileLastModified != 0)
 		{
 			// Upload OK, update the file timestamp if it was specified before
-			platform->GetMassStorage()->SetLastModifiedTime(session.filenameBeingUploaded, session.fileLastModified);
+			(void)platform->GetMassStorage()->SetLastModifiedTime(session.filenameBeingUploaded, session.fileLastModified);
 		}
 	}
 
@@ -422,9 +421,6 @@ void Webserver::HandleGCodeReply(const WebSource source, OutputBuffer *reply)
 	switch (source)
 	{
 	case WebSource::HTTP:
-#if 0
-		OutputBuffer::ReleaseAll(reply);
-#else
 		if (reply != nullptr)
 		{
 			if (numSessions > 0)
@@ -441,7 +437,6 @@ void Webserver::HandleGCodeReply(const WebSource source, OutputBuffer *reply)
 				OutputBuffer::ReleaseAll(reply);
 			}
 		}
-#endif
 		break;
 
 	case WebSource::Telnet:

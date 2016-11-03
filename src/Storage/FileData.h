@@ -41,9 +41,19 @@ public:
 		return false;
 	}
 
+	bool Read(char& b)
+	{
+		return f->Read(b);
+	}
+
 	int Read(char* buf, size_t nBytes)
 	{
 		return f->Read(buf, nBytes);
+	}
+
+	bool Write(char b)
+	{
+		return f->Write(b);
 	}
 
 	bool Write(const char *s, unsigned int len)

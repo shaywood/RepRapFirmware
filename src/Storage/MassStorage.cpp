@@ -310,18 +310,17 @@ bool MassStorage::DirectoryExists(const char* directory, const char* subDirector
 bool MassStorage::SetLastModifiedTime(const char *file, time_t time)
 {
 	FILINFO fno;
-	struct tm *timeInfo = localtime(&time);
+	const struct tm * const timeInfo = localtime(&time);
 
     fno.fdate = (WORD)(((timeInfo->tm_year - 80) * 512U) | (timeInfo->tm_mon + 1) * 32U | timeInfo->tm_mday);
     fno.ftime = (WORD)(timeInfo->tm_hour * 2048U | timeInfo->tm_min * 32U | timeInfo->tm_sec / 2U);
 
-	if (f_utime(file, &fno) != FR_OK)
+    const bool ok = (f_utime(file, &fno) == FR_OK);
+    if (!ok)
 	{
 		reprap.GetPlatform()->MessageF(HTTP_MESSAGE, "SetLastModifiedTime didn't work for file '%s'\n", file);
 	}
-	return true;
-
-    return f_utime(file, &fno) == FR_OK;
+    return ok;
 }
 
 // Mount the specified SD card, returning true if done, false if needs to be called again.

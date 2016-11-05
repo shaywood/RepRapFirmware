@@ -1353,7 +1353,7 @@ OutputBuffer *RepRap::GetFilelistResponse(const char *dir)
 		if (fileInfo.fileName[0] != '.')			// ignore Mac resource files and Linux hidden files
 		{
 			// Make sure we can end this response properly
-			if (bytesLeft < strlen(fileInfo.fileName) + 80)
+			if (bytesLeft < strlen(fileInfo.fileName) + 70)
 			{
 				// No more space available - stop here
 				break;
@@ -1371,7 +1371,7 @@ OutputBuffer *RepRap::GetFilelistResponse(const char *dir)
 			bytesLeft -= response->EncodeString(fileInfo.fileName, FILENAME_LENGTH, false);
 			bytesLeft -= response->catf(",\"size\":%u", fileInfo.size);
 
-			struct tm *timeInfo = localtime(&fileInfo.lastModified);
+			const struct tm * const timeInfo = gmtime(&fileInfo.lastModified);
 			if (timeInfo->tm_year <= /*19*/80)
 			{
 				// Don't send the last modified date if it is invalid

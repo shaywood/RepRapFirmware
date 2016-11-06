@@ -22,6 +22,7 @@ public:
 	bool FindNext(FileInfo &file_info);
 	const char* GetMonthName(const uint8_t month);
 	const char* CombineName(const char* directory, const char* fileName);
+	bool Delete(const char* location);
 	bool Delete(const char* directory, const char* fileName);
 	bool MakeDirectory(const char *parentDir, const char *dirName);
 	bool MakeDirectory(const char *directory);

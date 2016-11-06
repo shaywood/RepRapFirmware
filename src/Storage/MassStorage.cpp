@@ -222,6 +222,16 @@ const char* MassStorage::GetMonthName(const uint8_t month)
 }
 
 // Delete a file or directory
+bool MassStorage::Delete(const char* location)
+{
+	if (f_unlink(location) != FR_OK)
+	{
+		platform->MessageF(GENERIC_MESSAGE, "Can't delete file or directory %s\n", location);
+		return false;
+	}
+	return true;
+}
+
 bool MassStorage::Delete(const char* directory, const char* fileName)
 {
 	const char* location = (directory != NULL)

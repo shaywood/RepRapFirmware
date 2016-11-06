@@ -247,7 +247,7 @@ void Webserver::CancelUpload(HttpSession& session)
 	if (session.fileBeingUploaded.IsLive())
 	{
 		session.fileBeingUploaded.Close();
-		//TODO delete the file as well
+		reprap.GetPlatform()->GetMassStorage()->Delete(session.filenameBeingUploaded);
 	}
 	if (uploadIp == session.ip)
 	{

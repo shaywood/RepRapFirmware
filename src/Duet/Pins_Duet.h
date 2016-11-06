@@ -111,9 +111,9 @@ const Pin COOLING_FAN_PINS[NUM_FANS] = { X6, X17 };						// Pin D34 is PWM capab
 const Pin COOLING_FAN_RPM_PIN = 23;										// Pin PA15
 
 // SD cards
-const size_t NumSdCards = 2;
-const Pin SdCardDetectPins[NumSdCards] = {13, NoPin};
-const Pin SdWriteProtectPins[NumSdCards] = {NoPin, NoPin};
+const size_t NumSdCards = 1;
+const Pin SdCardDetectPins[NumSdCards] = {13};
+const Pin SdWriteProtectPins[NumSdCards] = {NoPin};
 const Pin SdSpiCSPins[1] = {66};										// Note: this clashes with inkjet support
 
 #if SUPPORT_INKJET

@@ -963,7 +963,7 @@ private:
 		AnalogOut(pin, pwm, freq);
 	}
 #else
-	AnalogOut(pin, pwm);
+	AnalogOut(pin, pwm, freq);
 #endif
 }
 

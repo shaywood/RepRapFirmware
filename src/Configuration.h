@@ -149,11 +149,12 @@ const size_t FILENAME_LENGTH = 100;
 #ifdef DUET_NG
 const uint16_t OUTPUT_BUFFER_SIZE = 256;			// How many bytes does each OutputBuffer hold?
 const size_t OUTPUT_BUFFER_COUNT = 32;				// How many OutputBuffer instances do we have?
+const size_t RESERVED_OUTPUT_BUFFERS = 1;			// Number of reserved output buffers after long responses. Must be enough for an HTTP header
 #else
 const uint16_t OUTPUT_BUFFER_SIZE = 128;			// How many bytes does each OutputBuffer hold?
 const size_t OUTPUT_BUFFER_COUNT = 32;				// How many OutputBuffer instances do we have?
-#endif
 const size_t RESERVED_OUTPUT_BUFFERS = 2;			// Number of reserved output buffers after long responses. Must be enough for an HTTP header
+#endif
 
 // Move system
 

@@ -19,7 +19,7 @@ GCodeQueue::GCodeQueue() : freeItems(nullptr), queuedItems(nullptr)
 	}
 }
 
-bool GCodeQueue::QueueCode(GCodeBuffer *gb)
+bool GCodeQueue::QueueCode(GCodeBuffer &gb)
 {
 	// Don't queue anything if no moves are being performed
 	unsigned int scheduledMoves = reprap.GetGCodes()->GetScheduledMoves();
@@ -38,17 +38,17 @@ bool GCodeQueue::QueueCode(GCodeBuffer *gb)
 
 	// Check for G-Codes that can be queued
 	bool queueCode = false;
-	if (gb->Seen('G'))
+	if (gb.Seen('G'))
 	{
-		const int code = gb->GetIValue();
+		const int code = gb.GetIValue();
 
 		// Set active/standby temperatures
-		queueCode = (code == 10 && gb->Seen('P'));
+		queueCode = (code == 10 && gb.Seen('P'));
 	}
 	// Check for M-Codes that can be queued
-	else if (gb->Seen('M'))
+	else if (gb.Seen('M'))
 	{
-		const int code = gb->GetIValue();
+		const int code = gb.GetIValue();
 
 		// Fan control
 		queueCode |= (code == 106 || code == 107);
@@ -115,9 +115,9 @@ bool GCodeQueue::QueueCode(GCodeBuffer *gb)
 		code->next = nullptr;
 
 		// Overwrite the passed gb's content if we could not store its original code
-		if (!queueCode && !gb->Put(codeToRun, codeToRunLength))
+		if (!queueCode && !gb.Put(codeToRun, codeToRunLength))
 		{
-			gb->Put('\n');
+			gb.Put('\n');
 		}
 	}
 
@@ -206,10 +206,10 @@ void GCodeQueue::Diagnostics(MessageType mtype)
 
 // QueuedCode class
 
-void QueuedCode::AssignFrom(GCodeBuffer *gb)
+void QueuedCode::AssignFrom(GCodeBuffer &gb)
 {
-	toolNumberAdjust = gb->GetToolNumberAdjust();
-	strncpy(code, gb->Buffer(), GCODE_LENGTH);
+	toolNumberAdjust = gb.GetToolNumberAdjust();
+	strncpy(code, gb.Buffer(), GCODE_LENGTH);
 	code[ARRAY_UPB(code)] = 0;
 }
 

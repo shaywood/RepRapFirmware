@@ -58,7 +58,7 @@ void GCodes::RestorePoint::Init()
 }
 
 GCodes::GCodes(Platform* p, Webserver* w) :
-	platform(p), webserver(w), active(false), stackPointer(0), isFlashing(false),
+	platform(p), webserver(w), active(false), isFlashing(false),
 	fileBeingHashed(nullptr)
 {
 	httpInput = new RegularGCodeInput(true);
@@ -66,16 +66,15 @@ GCodes::GCodes(Platform* p, Webserver* w) :
 	fileInput = new FileGCodeInput();
 	serialInput = new StreamGCodeInput(SERIAL_MAIN_DEVICE);
 	auxInput = new StreamGCodeInput(SERIAL_AUX_DEVICE);
-	fileMacroInput = new FileGCodeInput();
+	
+	httpGCode = new GCodeBuffer("http", HTTP_MESSAGE);
+	telnetGCode = new GCodeBuffer("telnet", TELNET_MESSAGE);
+	fileGCode = new GCodeBuffer("file", GENERIC_MESSAGE);
+	serialGCode = new GCodeBuffer("serial", HOST_MESSAGE);
+	auxGCode = new GCodeBuffer("aux", AUX_MESSAGE);
+	daemonGCode = new GCodeBuffer("daemon", GENERIC_MESSAGE);
+	queuedGCode = new GCodeBuffer("queue", GENERIC_MESSAGE);
 
-	httpGCode = new GCodeBuffer(platform, "http", HTTP_MESSAGE);
-	telnetGCode = new GCodeBuffer(platform, "telnet", TELNET_MESSAGE);
-	fileGCode = new GCodeBuffer(platform, "file", GENERIC_MESSAGE);
-	serialGCode = new GCodeBuffer(platform, "serial", HOST_MESSAGE);
-	auxGCode = new GCodeBuffer(platform, "aux", AUX_MESSAGE);
-	fileMacroGCode = new GCodeBuffer(platform, "macro", GENERIC_MESSAGE);
-
-	queuedGCode = new GCodeBuffer(platform, "queue", GENERIC_MESSAGE);
 	codeQueue = new GCodeQueue();
 }
 
@@ -133,18 +132,13 @@ void GCodes::Reset()
 	serialGCode->Init();
 	auxGCode->Init();
 	auxGCode->SetCommsProperties(1);					// by default, we require a checksum on the aux port
-	fileMacroGCode->Init();
+	daemonGCode->Init();
 
-	moveAvailable = false;
-	fileBeingPrinted.Close();
+	nextGcodeSource = 0;
+
 	fileToPrint.Close();
 	fileBeingWritten = NULL;
-	doingFileMacro = false;
 	dwellWaiting = false;
-	stackPointer = 0;
-	state = GCodeState::normal;
-	drivesRelative = true;
-	axesRelative = false;
 	probeCount = 0;
 	cannedCycleMoveCount = 0;
 	cannedCycleMoveQueued = false;
@@ -177,126 +171,72 @@ void GCodes::Reset()
 	firmwareUpdateModuleMap = 0;
 
 	codeQueue->Clear();
+	cancelWait = isWaiting = false;
+
+	for (size_t i = 0; i < NumResources; ++i)
+	{
+		resourceOwners[i] = nullptr;
+	}
 }
 
 float GCodes::FractionOfFilePrinted() const
 {
-	if (isPaused)
-	{
-		return (fileToPrint.IsLive()) ? fileToPrint.FractionRead() : -1.0;
-	}
-	if (stackPointer == 0)
-	{
-		return (fileBeingPrinted.IsLive() && !doingFileMacro) ? fileBeingPrinted.FractionRead() : -1.0;
-	}
-	return (stack[0].fileState.IsLive() && !stack[0].doingFileMacro) ? stack[0].fileState.FractionRead() : -1.0;
+	const FileData& fileBeingPrinted = fileGCode->OriginalMachineState().fileState;
+	return (fileBeingPrinted.IsLive()) ? fileBeingPrinted.FractionRead() : -1.0;
 }
 
-void GCodes::DoFilePrint(GCodeBuffer* gb, StringRef& reply)
+// Start running the config file
+// We use triggerCGode as the source to prevent any triggers being executed until we have finished
+bool GCodes::RunConfigFile(const char* fileName)
 {
-	if (gb != fileGCode || !isPaused)
-	{
-		FileGCodeInput *input = (gb == fileMacroGCode) ? fileMacroInput : fileInput;
+	return DoFileMacro(*daemonGCode, fileName, false);
+}
 
-		// Do we have more data to process?
-		if (input->ReadFromFile(fileBeingPrinted))
-		{
-			// Yes - for regular prints, keep track of the current file position
-			if (gb->StartingNewCode() && gb == fileGCode)
-			{
-				filePos = fileBeingPrinted.GetPosition() - input->BytesCached() - 1;
-				//debugPrintf("Set file pos %u\n", filePos);
-			}
-
-			// Then fill up the GCodeBuffer and run the next code
-			if (input->FillBuffer(gb))
-			{
-				gb->SetFinished(ActOnCode(gb, reply));
-			}
-		}
-		else
-		{
-			// No - looks like we have reached the end of the file.
-			// Don't close the file until all moves have been completed, in case the print gets paused.
-			// Also, this keeps the state as 'Printing' until the print really has finished.
-			if (!gb->StartingNewCode())		// if there is something in the buffer
-			{
-				if (gb->Put('\n')) 			// in case there wasn't one ending the file
-				{
-					gb->SetFinished(ActOnCode(gb, reply));
-				}
-				else
-				{
-					gb->Init();
-				}
-			}
-			else if (AllMovesAreFinishedAndMoveBufferIsLoaded())
-			{
-				input->Reset();
-				fileBeingPrinted.Close();
-
-				if (gb == fileGCode)
-				{
-					reprap.GetPrintMonitor()->StoppedPrint();
-					if (platform->Emulating() == marlin)
-					{
-						// Pronterface expects a "Done printing" message
-						HandleReply(gb, false, "Done printing file");
-					}
-				}
-			}
-		}
-	}
+// Are we still running the config file?
+bool GCodes::IsRunningConfigFile() const
+{
+	return daemonGCode->MachineState().fileState.IsLive();
 }
 
 void GCodes::Spin()
 {
 	if (!active)
+	{
 		return;
+	}
 
-	// First check for new gcodes from all sources except file
-	FillGCodeBuffers();
+	CheckTriggers();
 
+	// Get the GCodeBuffer that we want to work from
+	GCodeBuffer& gb = *(gcodeSources[nextGcodeSource]);
+
+	// Set up a buffer for the reply
 	char replyBuffer[gcodeReplyLength];
 	StringRef reply(replyBuffer, ARRAY_SIZE(replyBuffer));
 	reply.Clear();
 
-	// Check for poll requests from Pronterface and PanelDue so that the status is kept up to date during execution of file macros etc.
-	if (serialGCode->IsReady() && serialGCode->IsPollRequest())
+	if (gb.MachineState().state == GCodeState::normal)
 	{
-		serialGCode->SetFinished(ActOnCode(serialGCode, reply));
-	}
-	else if (auxGCode->IsReady() && auxGCode->IsPollRequest())
-	{
-		auxGCode->SetFinished(ActOnCode(auxGCode, reply));
-	}
-	else if (codeQueue->FillBuffer(queuedGCode))
-	{
-		queuedGCode->SetFinished(ActOnCode(queuedGCode, reply));
+		StartNextGCode(gb, reply);
 	}
 	else
 	{
-		// Perform the next operation of the state machine
-		// Note: if we change the state to 'normal' from another state, we must call HandleReply to tell the host about the command we have just completed.
-		switch (state)
-		{
-		case GCodeState::normal:
-			StartNextGCode(reply);
-			break;
+		// Perform the next operation of the state machine for this gcode source
+		bool error = false;
 
+		switch (gb.MachineState().state)
+		{
 		case GCodeState::waitingForMoveToComplete:
 			if (AllMovesAreFinishedAndMoveBufferIsLoaded())
 			{
-				HandleReply(gbCurrent, false, "");
-				state = GCodeState::normal;
+				gb.MachineState().state = GCodeState::normal;
 			}
 			break;
 
 		case GCodeState::homing:
 			if (toBeHomed == 0)
 			{
-				HandleReply(gbCurrent, false, "");
-				state = GCodeState::normal;
+				gb.MachineState().state = GCodeState::normal;
 			}
 			else
 			{
@@ -306,7 +246,7 @@ void GCodes::Spin()
 					if ((toBeHomed & (1u << axis)) != 0 && (axis != Z_AXIS || toBeHomed == (1u << Z_AXIS)))
 					{
 						toBeHomed &= ~(1u << axis);
-						DoFileMacro(homingFileNames[axis]);
+						DoFileMacro(gb, homingFileNames[axis]);
 						break;
 					}
 				}
@@ -316,21 +256,20 @@ void GCodes::Spin()
 		case GCodeState::setBed1:
 			reprap.GetMove()->SetIdentityTransform();
 			probeCount = 0;
-			state = GCodeState::setBed2;
+			gb.MachineState().state = GCodeState::setBed2;
 			// no break
 
 		case GCodeState::setBed2:
 			{
 				int numProbePoints = reprap.GetMove()->NumberOfXYProbePoints();
-				if (DoSingleZProbeAtPoint(probeCount, 0.0))
+				if (DoSingleZProbeAtPoint(gb, probeCount, 0.0))
 				{
 					probeCount++;
 					if (probeCount >= numProbePoints)
 					{
 						zProbesSet = true;
 						reprap.GetMove()->FinishedBedProbing(0, reply);
-						HandleReply(gbCurrent, false, reply.Pointer());
-						state = GCodeState::normal;
+						gb.MachineState().state = GCodeState::normal;
 					}
 				}
 			}
@@ -344,40 +283,38 @@ void GCodes::Spin()
 					reprap.StandbyTool(oldTool->Number());
 				}
 			}
-			state = GCodeState::toolChange2;
+			gb.MachineState().state = GCodeState::toolChange2;
 			if (reprap.GetTool(newToolNumber) != nullptr && AllAxesAreHomed())
 			{
 				scratchString.printf("tpre%d.g", newToolNumber);
-				DoFileMacro(scratchString.Pointer(), false);
+				DoFileMacro(gb, scratchString.Pointer(), false);
 			}
 			break;
 
 		case GCodeState::toolChange2: // Select the new tool (even if it doesn't exist - that just deselects all tools)
 			reprap.SelectTool(newToolNumber);
-			state = GCodeState::toolChange3;
+			gb.MachineState().state = GCodeState::toolChange3;
 			if (reprap.GetTool(newToolNumber) != nullptr && AllAxesAreHomed())
 			{
 				scratchString.printf("tpost%d.g", newToolNumber);
-				DoFileMacro(scratchString.Pointer(), false);
+				DoFileMacro(gb, scratchString.Pointer(), false);
 			}
 			break;
 
 		case GCodeState::toolChange3:
-			HandleReply(gbCurrent, false, "");
-			state = GCodeState::normal;
+			gb.MachineState().state = GCodeState::normal;
 			break;
 
 		case GCodeState::pausing1:
 			if (AllMovesAreFinishedAndMoveBufferIsLoaded())
 			{
-				state = GCodeState::pausing2;
-				DoFileMacro(PAUSE_G);
+				gb.MachineState().state = GCodeState::pausing2;
+				DoFileMacro(gb, PAUSE_G);
 			}
 			break;
 
 		case GCodeState::pausing2:
-			HandleReply(gbCurrent, false, "Printing paused");
-			state = GCodeState::normal;
+			reply.copy("Printing paused");
 			break;
 
 		case GCodeState::resuming1:
@@ -400,16 +337,16 @@ void GCodes::Spin()
 				moveBuffer.endStopsToCheck = 0;
 				moveBuffer.usePressureAdvance = false;
 				moveBuffer.filePos = noFilePosition;
-				if (state == GCodeState::resuming1 && currentZ > pauseRestorePoint.moveCoords[Z_AXIS])
+				if (gb.MachineState().state == GCodeState::resuming1 && currentZ > pauseRestorePoint.moveCoords[Z_AXIS])
 				{
 					// First move the head to the correct XY point, then move it down in a separate move
 					moveBuffer.coords[Z_AXIS] = currentZ;
-					state = GCodeState::resuming2;
+					gb.MachineState().state = GCodeState::resuming2;
 				}
 				else
 				{
 					// Just move to the saved position in one go
-					state = GCodeState::resuming3;
+					gb.MachineState().state = GCodeState::resuming3;
 				}
 				moveAvailable = true;
 			}
@@ -428,13 +365,13 @@ void GCodes::Spin()
 				}
 				feedRate = pauseRestorePoint.feedRate;
 				isPaused = false;
-				HandleReply(gbCurrent, false, "Printing resumed");
-				state = GCodeState::normal;
+				reply.copy("Printing resumed");
+				gb.MachineState().state = GCodeState::normal;
 			}
 			break;
 
 		case GCodeState::flashing1:
-	#ifdef DUET_NG
+#ifdef DUET_NG
 			// Update additional modules before the main firmware
 			if (FirmwareUpdater::IsReady())
 			{
@@ -451,12 +388,12 @@ void GCodes::Spin()
 				}
 				if (!updating)
 				{
-					state = GCodeState::flashing2;
+					gb.MachineState().state = GCodeState::flashing2;
 				}
 			}
-	#else
-			state = GCodeState::flashing2;
-	#endif
+#else
+			gb.MachineState().state = GCodeState::flashing2;
+#endif
 			break;
 
 		case GCodeState::flashing2:
@@ -468,13 +405,13 @@ void GCodes::Spin()
 				// The above call does not return unless an error occurred
 			}
 			isFlashing = false;
-			state = GCodeState::normal;
+			gb.MachineState().state = GCodeState::normal;
 			break;
 
 		case GCodeState::stopping:		// MO after executing stop.g if present
 		case GCodeState::sleeping:		// M1 after executing sleep.g if present
 			// Deselect the active tool and turn off all heaters, unless parameter Hn was used with n > 0
-			if (!gbCurrent->Seen('H') || gbCurrent->GetIValue() <= 0)
+			if (!gb.Seen('H') || gb.GetIValue() <= 0)
 			{
 				Tool* tool = reprap.GetCurrentTool();
 				if (tool != nullptr)
@@ -486,7 +423,7 @@ void GCodes::Spin()
 
 			// chrishamm 2014-18-10: Although RRP says M0 is supposed to turn off all drives and heaters,
 			// I think M1 is sufficient for this purpose. Leave M0 for a normal reset.
-			if (state == GCodeState::sleeping)
+			if (gb.MachineState().state == GCodeState::sleeping)
 			{
 				DisableDrives();
 			}
@@ -494,42 +431,68 @@ void GCodes::Spin()
 			{
 				platform->SetDriversIdle();
 			}
-			HandleReply(gbCurrent, false, "");
-			state = GCodeState::normal;
+			gb.MachineState().state = GCodeState::normal;
 			break;
 
 		default:				// should not happen
 			break;
 		}
+
+		if (gb.MachineState().state == GCodeState::normal)
+		{
+			// We completed a command, so unlock resources and tell the host about it
+			UnlockAll(gb);
+			HandleReply(gb, error, reply.Pointer());
+		}
+	}
+
+	// Move on to the next gcode source ready for next time
+	++nextGcodeSource;
+	if (nextGcodeSource == ARRAY_SIZE(gcodeSources))
+	{
+		nextGcodeSource = 0;
 	}
 
 	platform->ClassReport(longWait);
 }
 
-// Get new data into the gcode buffers except the file and macro gcode buffers, and deal with any file uploading
-void GCodes::FillGCodeBuffers()
+// Start a new gcode, or continue to execute one that has already been started:
+void GCodes::StartNextGCode(GCodeBuffer& gb, StringRef& reply)
 {
-	// HTTP
-	if (httpGCode->IsIdle())
+	if (gb.IsReady() || gb.IsExecuting())
 	{
+		gb.SetFinished(ActOnCode(gb, reply));
+	}
+	else if (gb.MachineState().fileState.IsLive())
+	{
+		if (&gb != fileGCode || !isPaused)
+		{
+			DoFilePrint(gb, reply);
+		}
+	}
+	else if (&gb == queuedGCode)
+	{
+		// Code queue
+		codeQueue->FillBuffer(queuedGCode);
+	}
+	else if (&gb == httpGCode)
+	{
+		// Webserver
 		httpInput->FillBuffer(httpGCode);
 	}
-
-	// Telnet
-	if (telnetGCode->IsIdle())
+	else if (&gb == telnetGCode)
 	{
+		// Telnet
 		telnetInput->FillBuffer(telnetGCode);
 	}
-
-	// USB interface
-	if (serialGCode->IsIdle())
+	else if (&gb == serialGCode)
 	{
+		// USB interface
 		serialInput->FillBuffer(serialGCode);
 	}
-
-	// Aux serial port (typically PanelDue)
-	if (auxGCode->IsIdle())
+	else if (&gb == auxGCode)
 	{
+		// Aux serial port (typically PanelDue)
 		if (auxInput->FillBuffer(auxGCode))
 		{
 			// by default we assume no PanelDue is attached
@@ -538,91 +501,73 @@ void GCodes::FillGCodeBuffers()
 	}
 }
 
-// Start a new gcode, or continue to execute one that has already been started:
-// 1. If we're doing a file macro, don't allow anything else to interrupt it
-// 2. Continue executing any gcode that we have already started
-// 3. Check for external triggers
-// 4. If we have a gcode ready from any non-file sources, start executing it
-// 5. Else continue a print from file, if one is running
-void GCodes::StartNextGCode(StringRef& reply)
+void GCodes::DoFilePrint(GCodeBuffer& gb, StringRef& reply)
 {
-	// If a file macro is running, we don't allow anything to interrupt it
-	if (doingFileMacro)
+	FileData& fd = gb.MachineState().fileState;
+
+	// Do we have more data to process?
+	if (fileInput->ReadFromFile(fd))
 	{
-		// Complete the current move (must do this before checking whether we have finished the file in case it didn't end in newline)
-		if (fileMacroGCode->IsReady() || fileMacroGCode->IsExecuting())
+		// Yes - for regular prints, keep track of the current file position
+		if (gb.StartingNewCode() && &gb == fileGCode && gb.MachineState().previous == nullptr)
 		{
-			fileMacroGCode->SetFinished(ActOnCode(fileMacroGCode, reply));
+			filePos = fd.GetPosition() - fileInput->BytesCached() - 1;
+			//debugPrintf("Set file pos %u\n", filePos);
 		}
-		else if (fileBeingPrinted.IsLive())				// Have we finished the file?
+
+		// Then fill up the GCodeBuffer and run the next code
+		if (fileInput->FillBuffer(&gb))
 		{
-			DoFilePrint(fileMacroGCode, reply);			// No - Do more of the file
+			gb.SetFinished(ActOnCode(gb, reply));
 		}
-		else if (AllMovesAreFinishedAndMoveBufferIsLoaded())
+	}
+	else
+	{
+		// We have reached the end of the file. Check for the last line of gcode not ending in newline.
+		if (!gb.StartingNewCode())				// if there is something in the buffer
 		{
-			Pop();
-			fileMacroGCode->Init();
+			if (gb.Put('\n')) 					// in case there wasn't a newline ending the file
+			{
+				gb.SetFinished(ActOnCode(gb, reply));
+				return;
+			}
 		}
-	}
-	// Check for gcodes that we have already started
-	else if (queuedGCode->IsExecuting())
-	{
-		// Normally we should never get here...
-		queuedGCode->SetFinished(ActOnCode(queuedGCode, reply));
-	}
-	else if (httpGCode->IsExecuting())
-	{
-		httpGCode->SetFinished(ActOnCode(httpGCode, reply));
-	}
-	else if (telnetGCode->IsExecuting())
-	{
-		telnetGCode->SetFinished(ActOnCode(telnetGCode, reply));
-	}
-	else if (serialGCode->IsExecuting())
-	{
-		serialGCode->SetFinished(ActOnCode(serialGCode, reply));
-	}
-	else if (auxGCode->IsExecuting())
-	{
-		auxGCode->SetFinished(ActOnCode(auxGCode, reply));
-	}
-	// Check triggers
-	else if (CheckTriggers())
-	{
-		// We've handled a trigger, so nothing else to do
-	}
-	// Check for gcodes we can start
-	else if (httpGCode->IsReady())
-	{
-		httpGCode->SetFinished(ActOnCode(httpGCode, reply));
-	}
-	else if (telnetGCode->IsReady())
-	{
-		telnetGCode->SetFinished(ActOnCode(telnetGCode, reply));
-	}
-	else if (serialGCode->IsReady())
-	{
-		serialGCode->SetFinished(ActOnCode(serialGCode, reply));
-	}
-	else if (auxGCode->IsReady())
-	{
-		auxGCode->SetFinished(ActOnCode(auxGCode, reply));
-	}
-	// Print some more of the current file.
-	// Do this last so certain codes like M116 can be interrupted.
-	else if (fileGCode->IsExecuting())
-	{
-		fileGCode->SetFinished(ActOnCode(fileGCode, reply));
-	}
-	else if (fileBeingPrinted.IsLive())
-	{
-		DoFilePrint(fileGCode, reply);
+
+		gb.Init();								// mark buffer as empty
+
+		// Don't close the file until all moves have been completed, in case the print gets paused.
+		// Also, this keeps the state as 'Printing' until the print really has finished.
+		if (AllMovesAreFinishedAndMoveBufferIsLoaded())
+		{
+			fileInput->Reset();
+			fd.Close();
+			if (gb.MachineState().previous == nullptr)
+			{
+				// Finished printing SD card file
+				reprap.GetPrintMonitor()->StoppedPrint();
+				if (platform->Emulating() == marlin)
+				{
+					// Pronterface expects a "Done printing" message
+					HandleReply(gb, false, "Done printing file");
+				}
+			}
+			else
+			{
+				// Finished a macro
+				Pop(gb);
+				gb.Init();
+				if (gb.MachineState().state == GCodeState::normal)
+				{
+					UnlockAll(gb);
+					HandleReply(gb, false, "");
+				}
+			}
+		}
 	}
 }
 
-// Check for and execute triggers, returning true if started executing one.
-// We already checked that no file macro is being executed before calling this.
-bool GCodes::CheckTriggers()
+// Check for and execute triggers
+void GCodes::CheckTriggers()
 {
 	// Check for endstop state changes that activate new triggers
 	const TriggerMask oldEndstopStates = lastEndstopStates;
@@ -648,19 +593,19 @@ bool GCodes::CheckTriggers()
 	// If any triggers are pending, activate the one with the lowest number
 	if (lowestTriggerPending < MaxTriggers)
 	{
-		gbCurrent = nullptr;
-		triggersPending &= ~(1u << lowestTriggerPending);		// clear the trigger
 
 		// Execute the trigger
 		switch(lowestTriggerPending)
 		{
 		case 0:
 			// Trigger 0 does an emergency stop
+			triggersPending &= ~(1u << lowestTriggerPending);			// clear the trigger
 			DoEmergencyStop();
 			break;
 
 		case 1:
 			// Trigger 1 pauses the print, if printing from file
+			triggersPending &= ~(1u << lowestTriggerPending);			// clear the trigger
 			if (!isPaused && reprap.GetPrintMonitor()->IsPrinting())
 			{
 				DoPause(true);
@@ -669,16 +614,16 @@ bool GCodes::CheckTriggers()
 
 		default:
 			// All other trigger numbers execute the corresponding macro file
+			if (!daemonGCode->MachineState().fileState.IsLive())		// if not already executing a trigger or config.g
 			{
+				triggersPending &= ~(1u << lowestTriggerPending);		// clear the trigger
 				char buffer[25];
 				StringRef filename(buffer, ARRAY_SIZE(buffer));
 				filename.printf(SYS_DIR "trigger%u.g", lowestTriggerPending);
-				DoFileMacro(filename.Pointer(), true);
+				DoFileMacro(*daemonGCode, filename.Pointer(), true);
 			}
 		}
-		return true;		// we processed a trigger
 	}
-	return false;			// no triggers were pending
 }
 
 // Execute an emergency stop
@@ -699,10 +644,10 @@ void GCodes::DoPause(bool externalToFile)
 		pauseRestorePoint.feedRate = feedRate;										// the call to PausePrint may or may not change this
 		FilePosition fPos = reprap.GetMove()->PausePrint(pauseRestorePoint.moveCoords, pauseRestorePoint.feedRate, skippedMoves);	// tell Move we wish to pause the current print
 
-		FileData& fdata = (stackPointer == 0) ? fileBeingPrinted : stack[0].fileState;
+		FileData& fdata = fileGCode->MachineState().fileState;
 		if (fPos != noFilePosition && fdata.IsLive())
 		{
-			fdata.Seek(fPos);											// replay the abandoned instructions if/when we resume
+			fdata.Seek(fPos);														// replay the abandoned instructions if/when we resume
 		}
 		fileInput->Reset();
 		fileGCode->Init();
@@ -745,7 +690,7 @@ void GCodes::DoPause(bool externalToFile)
 	{
 		pausedFanValues[i] = platform->GetFanValue(i);
 	}
-	state = GCodeState::pausing1;
+	fileGCode->MachineState().state = GCodeState::pausing1;
 	isPaused = true;
 }
 
@@ -753,32 +698,30 @@ void GCodes::Diagnostics(MessageType mtype)
 {
 	platform->Message(mtype, "=== GCodes ===\n");
 	platform->MessageF(mtype, "Move available? %s\n", moveAvailable ? "yes" : "no");
-	platform->MessageF(mtype, "Stack pointer: %u of %u\n", stackPointer, StackSize);
-	fileMacroGCode->Diagnostics(mtype);
-	httpGCode->Diagnostics(mtype);
-	telnetGCode->Diagnostics(mtype);
-	serialGCode->Diagnostics(mtype);
-	auxGCode->Diagnostics(mtype);
-	fileGCode->Diagnostics(mtype);
+	platform->MessageF(mtype, "Stack records: %u allocated, %u in use\n", GCodeMachineState::GetNumAllocated(), GCodeMachineState::GetNumInUse());
 
-	queuedGCode->Diagnostics(mtype);
-	codeQueue->Diagnostics(mtype);
+	for (size_t i = 0; i < ARRAY_SIZE(gcodeSources); ++i)
+	{
+		gcodeSources[i]->Diagnostics(mtype);
+	}
 }
 
 // The wait till everything's done function.  If you need the machine to
 // be idle before you do something (for example homing an axis, or shutting down) call this
-// until it returns true.  As a side-effect it loads moveBuffer with the last
-// position and feedrate for you.
-
+// until it returns true.  As a side-effect it loads moveBuffer with the last position and feedrate for you.
 bool GCodes::AllMovesAreFinishedAndMoveBufferIsLoaded()
 {
 	// Last one gone?
 	if (moveAvailable)
+	{
 		return false;
+	}
 
 	// Wait for all the queued moves to stop so we get the actual last position
 	if (!reprap.GetMove()->AllMovesAreFinished())
+	{
 		return false;
+	}
 
 	reprap.GetMove()->ResumeMoving();
 	reprap.GetMove()->GetCurrentUserPosition(moveBuffer.coords, 0);
@@ -786,48 +729,30 @@ bool GCodes::AllMovesAreFinishedAndMoveBufferIsLoaded()
 }
 
 // Save (some of) the state of the machine for recovery in the future.
-void GCodes::Push()
+bool GCodes::Push(GCodeBuffer& gb)
 {
-	if (stackPointer >= StackSize)
+	bool ok = gb.PushState();
+	if (!ok)
 	{
 		platform->Message(GENERIC_MESSAGE, "Push(): stack overflow!\n");
-		return;
 	}
-
-	stack[stackPointer].state = state;
-	stack[stackPointer].gb = gbCurrent;
-	stack[stackPointer].feedrate = feedRate;
-	stack[stackPointer].fileState.CopyFrom(fileBeingPrinted);
-	stack[stackPointer].drivesRelative = drivesRelative;
-	stack[stackPointer].axesRelative = axesRelative;
-	stack[stackPointer].doingFileMacro = doingFileMacro;
-	stackPointer++;
+	return ok;
 }
 
 // Recover a saved state
-void GCodes::Pop()
+void GCodes::Pop(GCodeBuffer& gb)
 {
-	if (stackPointer < 1)
+	if (!gb.PopState())
 	{
 		platform->Message(GENERIC_MESSAGE, "Pop(): stack underflow!\n");
-		return;
 	}
-
-	stackPointer--;
-	state = stack[stackPointer].state;
-	gbCurrent = stack[stackPointer].gb;
-	feedRate = stack[stackPointer].feedrate;
-	fileBeingPrinted.MoveFrom(stack[stackPointer].fileState);
-	drivesRelative = stack[stackPointer].drivesRelative;
-	axesRelative = stack[stackPointer].axesRelative;
-	doingFileMacro = stack[stackPointer].doingFileMacro;
 }
 
 // Move expects all axis movements to be absolute, and all extruder drive moves to be relative.  This function serves that.
 // 'moveType' is the S parameter in the G0 or G1 command, or -1 if we are doing G92.
 // For regular (type 0) moves, we apply limits and do X axis mapping.
 // Returns true if we have a legal move (or G92 argument), false if this gcode should be discarded
-bool GCodes::LoadMoveBufferFromGCode(GCodeBuffer *gb, int moveType)
+bool GCodes::LoadMoveBufferFromGCode(GCodeBuffer& gb, int moveType)
 {
 	// Zero every extruder drive as some drives may not be changed
 	for (size_t drive = numAxes; drive < DRIVES; drive++)
@@ -836,15 +761,15 @@ bool GCodes::LoadMoveBufferFromGCode(GCodeBuffer *gb, int moveType)
 	}
 
 	// Deal with feed rate
-	if (gb->Seen(feedrateLetter))
+	if (gb.Seen(feedrateLetter))
 	{
-		feedRate = gb->GetFValue() * distanceScale * speedFactor;
+		feedRate = gb.GetFValue() * distanceScale * speedFactor;
 	}
 	moveBuffer.feedRate = feedRate;
 
 	// First do extrusion, and check, if we are extruding, that we have a tool to extrude with
 	Tool* tool = reprap.GetCurrentTool();
-	if (gb->Seen(extrudeLetter))
+	if (gb.Seen(extrudeLetter))
 	{
 		if (tool == nullptr)
 		{
@@ -857,7 +782,7 @@ bool GCodes::LoadMoveBufferFromGCode(GCodeBuffer *gb, int moveType)
 			float eMovement[MaxExtruders];
 			if (tool->GetMixing())
 			{
-				float length = gb->GetFValue();
+				float length = gb.GetFValue();
 				for (size_t drive = 0; drive < tool->DriveCount(); drive++)
 				{
 					eMovement[drive] = length * tool->GetMix()[drive];
@@ -866,10 +791,10 @@ bool GCodes::LoadMoveBufferFromGCode(GCodeBuffer *gb, int moveType)
 			else
 			{
 				size_t mc = eMoveCount;
-				gb->GetFloatArray(eMovement, mc, false);
+				gb.GetFloatArray(eMovement, mc, false);
 				if (eMoveCount != mc)
 				{
-					platform->MessageF(GENERIC_MESSAGE, "Wrong number of extruder drives for the selected tool: %s\n", gb->Buffer());
+					platform->MessageF(GENERIC_MESSAGE, "Wrong number of extruder drives for the selected tool: %s\n", gb.Buffer());
 					return false;
 				}
 			}
@@ -887,7 +812,7 @@ bool GCodes::LoadMoveBufferFromGCode(GCodeBuffer *gb, int moveType)
 				}
 				else
 				{
-					float extrusionAmount = (drivesRelative)
+					float extrusionAmount = (gb.MachineState().drivesRelative)
 												? moveArg
 												: moveArg - lastRawExtruderPosition[drive];
 					lastRawExtruderPosition[drive] += extrusionAmount;
@@ -903,9 +828,9 @@ bool GCodes::LoadMoveBufferFromGCode(GCodeBuffer *gb, int moveType)
 	const Tool *currentTool = reprap.GetCurrentTool();
 	for (size_t axis = 0; axis < numAxes; axis++)
 	{
-		if (gb->Seen(axisLetters[axis]))
+		if (gb.Seen(axisLetters[axis]))
 		{
-			float moveArg = gb->GetFValue() * distanceScale * axisScaleFactors[axis];
+			float moveArg = gb.GetFValue() * distanceScale * axisScaleFactors[axis];
 			if (moveType == -1)						// if doing G92
 			{
 				SetAxisIsHomed(axis);				// doing a G92 defines the absolute axis position
@@ -918,7 +843,7 @@ bool GCodes::LoadMoveBufferFromGCode(GCodeBuffer *gb, int moveType)
 				{
 					const size_t mappedAxis = currentTool->GetAxisMap()[i];
 					float mappedMoveArg = moveArg;
-					if (axesRelative)
+					if (gb.MachineState().axesRelative)
 					{
 						mappedMoveArg += moveBuffer.coords[mappedAxis];
 					}
@@ -931,7 +856,7 @@ bool GCodes::LoadMoveBufferFromGCode(GCodeBuffer *gb, int moveType)
 			}
 			else
 			{
-				if (axesRelative)
+				if (gb.MachineState().axesRelative)
 				{
 					moveArg += moveBuffer.coords[axis];
 				}
@@ -997,7 +922,7 @@ bool GCodes::LoadMoveBufferFromGCode(GCodeBuffer *gb, int moveType)
 // If we have queued the move and the caller doesn't need to wait for it to complete, return 1.
 // If we need to wait for the move to complete before doing another one (e.g. because endstops are checked in this move), return 2.
 
-int GCodes::SetUpMove(GCodeBuffer *gb, StringRef& reply)
+int GCodes::SetUpMove(GCodeBuffer& gb, StringRef& reply)
 {
 	// Last one gone yet?
 	if (moveAvailable)
@@ -1008,9 +933,9 @@ int GCodes::SetUpMove(GCodeBuffer *gb, StringRef& reply)
 	// Check to see if the move is a 'homing' move that endstops are checked on.
 	moveBuffer.endStopsToCheck = 0;
 	moveBuffer.moveType = 0;
-	if (gb->Seen('S'))
+	if (gb.Seen('S'))
 	{
-		int ival = gb->GetIValue();
+		int ival = gb.GetIValue();
 		if (ival == 1 || ival == 2)
 		{
 			moveBuffer.moveType = ival;
@@ -1020,18 +945,22 @@ int GCodes::SetUpMove(GCodeBuffer *gb, StringRef& reply)
 		{
 			for (size_t i = 0; i < numAxes; ++i)
 			{
-				if (gb->Seen(axisLetters[i]))
+				if (gb.Seen(axisLetters[i]))
 				{
 					moveBuffer.endStopsToCheck |= (1u << i);
 				}
 			}
+		}
+		else if (ival == 99)		// temporary code to log Z probe change positions
+		{
+			moveBuffer.endStopsToCheck |= LogProbeChanges;
 		}
 	}
 
 	if (reprap.GetMove()->IsDeltaMode())
 	{
 		// Extra checks to avoid damaging delta printers
-		if (moveBuffer.moveType != 0 && !axesRelative)
+		if (moveBuffer.moveType != 0 && !gb.MachineState().axesRelative)
 		{
 			// We have been asked to do a move without delta mapping on a delta machine, but the move is not relative.
 			// This may be damaging and is almost certainly a user mistake, so ignore the move.
@@ -1043,7 +972,7 @@ int GCodes::SetUpMove(GCodeBuffer *gb, StringRef& reply)
 		{
 			// The user may be attempting to move a delta printer to an XYZ position before homing the axes
 			// This may be damaging and is almost certainly a user mistake, so ignore the move. But allow extruder-only moves.
-			if (gb->Seen(axisLetters[X_AXIS]) || gb->Seen(axisLetters[Y_AXIS]) || gb->Seen(axisLetters[Z_AXIS]))
+			if (gb.Seen(axisLetters[X_AXIS]) || gb.Seen(axisLetters[Y_AXIS]) || gb.Seen(axisLetters[Z_AXIS]))
 			{
 				reply.copy("Attempt to move the head of a delta printer before homing the towers");
 				return 1;
@@ -1081,10 +1010,10 @@ int GCodes::SetUpMove(GCodeBuffer *gb, StringRef& reply)
 				break;
 			}
 		}
-		moveBuffer.filePos = (gb == fileGCode) ? filePos : noFilePosition;
+		moveBuffer.filePos = (&gb == fileGCode) ? filePos : noFilePosition;
 		//debugPrintf("Queue move pos %u\n", moveFilePos);
 	}
-	return (moveBuffer.moveType != 0) ? 2 : 1;
+	return (moveBuffer.moveType != 0 || moveBuffer.endStopsToCheck != 0) ? 2 : 1;
 }
 
 // The Move class calls this function to find what to do next.
@@ -1111,7 +1040,7 @@ void GCodes::ClearMove()
 
 // Run a file macro. Prior to calling this, 'state' must be set to the state we want to enter when the macro has been completed.
 // Return true if the file was found or it wasn't and we were asked to report that fact.
-bool GCodes::DoFileMacro(const char* fileName, bool reportMissing)
+bool GCodes::DoFileMacro(GCodeBuffer& gb, const char* fileName, bool reportMissing)
 {
 	FileStore *f = platform->GetFileStore(platform->GetSysDir(), fileName, false);
 	if (f == nullptr)
@@ -1125,40 +1054,44 @@ bool GCodes::DoFileMacro(const char* fileName, bool reportMissing)
 		return false;
 	}
 
-	Push();
-	fileBeingPrinted.Set(f);
-	doingFileMacro = true;
-	fileMacroGCode->Init();
-	state = GCodeState::normal;
+	if (!Push(gb))
+	{
+		return true;
+	}
+	gb.MachineState().fileState.Set(f);
+	gb.MachineState().doingFileMacro = true;
+	gb.MachineState().state = GCodeState::normal;
+	gb.Init();
 	return true;
 }
 
-void GCodes::FileMacroCyclesReturn()
+void GCodes::FileMacroCyclesReturn(GCodeBuffer& gb)
 {
-	if (doingFileMacro)
+	if (gb.MachineState().doingFileMacro)
 	{
-		Pop();
-		fileMacroGCode->Init();
+		gb.PopState();
+		gb.Init();
 	}
 }
 
 // To execute any move, call this until it returns true.
-// moveToDo[] entries corresponding with false entries in action[] will
-// be ignored.  Recall that moveToDo[DRIVES] should contain the feedrate
-// you want (if action[DRIVES] is true).
-bool GCodes::DoCannedCycleMove(EndstopChecks ce)
+// There is only one copy of the canned cycle variable so you must acquire the move lock before calling this.
+bool GCodes::DoCannedCycleMove(GCodeBuffer& gb, EndstopChecks ce)
 {
-	if (AllMovesAreFinishedAndMoveBufferIsLoaded())
+	if (LockMovementAndWaitForStandstill(gb))
 	{
 		if (cannedCycleMoveQueued)		// if the move has already been queued, it must have finished
 		{
-			Pop();
+			Pop(gb);
 			cannedCycleMoveQueued = false;
 			return true;
 		}
 
 		// Otherwise, the move has not been queued yet
-		Push();
+		if (!Push(gb))
+		{
+			return true;				// stack overflow
+		}
 
 		for (size_t drive = 0; drive < DRIVES; drive++)
 		{
@@ -1185,14 +1118,14 @@ bool GCodes::DoCannedCycleMove(EndstopChecks ce)
 }
 
 // This sets positions.  I.e. it handles G92.
-bool GCodes::SetPositions(GCodeBuffer *gb)
+bool GCodes::SetPositions(GCodeBuffer& gb)
 {
 	// Don't pause the machine if only extruder drives are being reset (DC, 2015-09-06).
 	// This avoids blobs and seams when the gcode uses absolute E coordinates and periodically includes G92 E0.
 	bool includingAxes = false;
 	for (size_t drive = 0; drive < numAxes; ++drive)
 	{
-		if (gb->Seen(axisLetters[drive]))
+		if (gb.Seen(axisLetters[drive]))
 		{
 			includingAxes = true;
 			break;
@@ -1201,7 +1134,7 @@ bool GCodes::SetPositions(GCodeBuffer *gb)
 
 	if (includingAxes)
 	{
-		if (!AllMovesAreFinishedAndMoveBufferIsLoaded())
+		if (!LockMovementAndWaitForStandstill(gb))
 		{
 			return false;
 		}
@@ -1235,11 +1168,11 @@ bool GCodes::SetPositions(GCodeBuffer *gb)
 // Offset the axes by the X, Y, and Z amounts in the M code in gb.  Say the machine is at [10, 20, 30] and
 // the offsets specified are [8, 2, -5].  The machine will move to [18, 22, 25] and henceforth consider that point
 // to be [10, 20, 30].
-bool GCodes::OffsetAxes(GCodeBuffer* gb)
+bool GCodes::OffsetAxes(GCodeBuffer& gb)
 {
 	if (!offSetSet)
 	{
-		if (!AllMovesAreFinishedAndMoveBufferIsLoaded())
+		if (!LockMovementAndWaitForStandstill(gb))
 		{
 			return false;
 		}
@@ -1248,9 +1181,9 @@ bool GCodes::OffsetAxes(GCodeBuffer* gb)
 			if (drive < numAxes)
 			{
 				record[drive] = moveBuffer.coords[drive];
-				if (gb->Seen(axisLetters[drive]))
+				if (gb.Seen(axisLetters[drive]))
 				{
-					cannedMoveCoords[drive] = gb->GetFValue();
+					cannedMoveCoords[drive] = gb.GetFValue();
 					cannedMoveType[drive] = CannedMoveType::relative;
 				}
 			}
@@ -1261,9 +1194,9 @@ bool GCodes::OffsetAxes(GCodeBuffer* gb)
 			cannedMoveType[drive] = CannedMoveType::none;
 		}
 
-		if (gb->Seen(feedrateLetter)) // Has the user specified a feedrate?
+		if (gb.Seen(feedrateLetter)) // Has the user specified a feedrate?
 		{
-			cannedFeedRate = gb->GetFValue() * distanceScale * SECONDS_TO_MINUTES;
+			cannedFeedRate = gb.GetFValue() * distanceScale * SECONDS_TO_MINUTES;
 		}
 		else
 		{
@@ -1273,7 +1206,7 @@ bool GCodes::OffsetAxes(GCodeBuffer* gb)
 		offSetSet = true;
 	}
 
-	if (DoCannedCycleMove(0))
+	if (DoCannedCycleMove(gb, 0))
 	{
 		// Restore positions
 		for (size_t drive = 0; drive < DRIVES; drive++)
@@ -1294,9 +1227,9 @@ bool GCodes::OffsetAxes(GCodeBuffer* gb)
 // Returns true if completed, false if needs to be called again.
 // 'reply' is only written if there is an error.
 // 'error' is false on entry, gets changed to true if there is an error.
-bool GCodes::DoHome(GCodeBuffer *gb, StringRef& reply, bool& error)
+bool GCodes::DoHome(GCodeBuffer& gb, StringRef& reply, bool& error)
 {
-	if (!AllMovesAreFinishedAndMoveBufferIsLoaded())
+	if (!LockMovementAndWaitForStandstill(gb))
 	{
 		return false;
 	}
@@ -1320,14 +1253,14 @@ bool GCodes::DoHome(GCodeBuffer *gb, StringRef& reply, bool& error)
 	if (reprap.GetMove()->IsDeltaMode())
 	{
 		SetAllAxesNotHomed();
-		DoFileMacro(HOME_DELTA_G);
+		DoFileMacro(gb, HOME_DELTA_G);
 	}
 	else
 	{
 		toBeHomed = 0;
 		for (size_t axis = 0; axis < numAxes; ++axis)
 		{
-			if (gb->Seen(axisLetters[axis]))
+			if (gb.Seen(axisLetters[axis]))
 			{
 				toBeHomed |= (1u << axis);
 				SetAxisNotHomed(axis);
@@ -1338,7 +1271,7 @@ bool GCodes::DoHome(GCodeBuffer *gb, StringRef& reply, bool& error)
 		{
 			// Homing everything
 			SetAllAxesNotHomed();
-			DoFileMacro(HOME_ALL_G);
+			DoFileMacro(gb, HOME_ALL_G);
 		}
 		else if (   platform->MustHomeXYBeforeZ()
 				 && ((toBeHomed & (1u << Z_AXIS)) != 0)
@@ -1351,7 +1284,7 @@ bool GCodes::DoHome(GCodeBuffer *gb, StringRef& reply, bool& error)
 		}
 		else
 		{
-			state = GCodeState::homing;
+			gb.MachineState().state = GCodeState::homing;
 		}
 	}
 	return true;
@@ -1361,7 +1294,7 @@ bool GCodes::DoHome(GCodeBuffer *gb, StringRef& reply, bool& error)
 // probes the bed height, and records the Z coordinate probed.  If you want to program any general
 // internal canned cycle, this shows how to do it.
 // On entry, probePointIndex specifies which of the points this is.
-bool GCodes::DoSingleZProbeAtPoint(int probePointIndex, float heightAdjust)
+bool GCodes::DoSingleZProbeAtPoint(GCodeBuffer& gb, int probePointIndex, float heightAdjust)
 {
 	reprap.GetMove()->SetIdentityTransform(); 		// It doesn't matter if these are called repeatedly
 
@@ -1376,7 +1309,7 @@ bool GCodes::DoSingleZProbeAtPoint(int probePointIndex, float heightAdjust)
 		cannedMoveCoords[Z_AXIS] = platform->GetZProbeDiveHeight() + max<float>(platform->ZProbeStopHeight(), 0.0);
 		cannedMoveType[Z_AXIS] = CannedMoveType::absolute;
 		cannedFeedRate = platform->GetZProbeTravelSpeed();
-		if (DoCannedCycleMove(0))
+		if (DoCannedCycleMove(gb, 0))
 		{
 			cannedCycleMoveCount++;
 		}
@@ -1388,7 +1321,7 @@ bool GCodes::DoSingleZProbeAtPoint(int probePointIndex, float heightAdjust)
 		cannedMoveType[Y_AXIS] = CannedMoveType::absolute;
 		// NB - we don't use the Z value
 		cannedFeedRate = platform->GetZProbeTravelSpeed();
-		if (DoCannedCycleMove(0))
+		if (DoCannedCycleMove(gb, 0))
 		{
 			cannedCycleMoveCount++;
 		}
@@ -1399,7 +1332,7 @@ bool GCodes::DoSingleZProbeAtPoint(int probePointIndex, float heightAdjust)
 			const float height = (GetAxisIsHomed(Z_AXIS))
 									? 2 * platform->GetZProbeDiveHeight()			// Z axis has been homed, so no point in going very far
 									: 1.1 * platform->AxisTotalLength(Z_AXIS);		// Z axis not homed yet, so treat this as a homing move
-			switch(DoZProbe(height))
+			switch(DoZProbe(gb, height))
 			{
 			case 0:
 				// Z probe is already triggered at the start of the move, so abandon the probe and record an error
@@ -1443,7 +1376,7 @@ bool GCodes::DoSingleZProbeAtPoint(int probePointIndex, float heightAdjust)
 		cannedMoveCoords[Z_AXIS] = platform->GetZProbeDiveHeight() + max<float>(platform->ZProbeStopHeight(), 0.0);
 		cannedMoveType[Z_AXIS] = CannedMoveType::absolute;
 		cannedFeedRate = platform->GetZProbeTravelSpeed();
-		if (DoCannedCycleMove(0))
+		if (DoCannedCycleMove(gb, 0))
 		{
 			cannedCycleMoveCount = 0;
 			return true;
@@ -1458,9 +1391,9 @@ bool GCodes::DoSingleZProbeAtPoint(int probePointIndex, float heightAdjust)
 
 // This simply moves down till the Z probe/switch is triggered. Call it repeatedly until it returns true.
 // Called when we do a G30 with no P parameter.
-bool GCodes::DoSingleZProbe(bool reportOnly, float heightAdjust)
+bool GCodes::DoSingleZProbe(GCodeBuffer& gb, bool reportOnly, float heightAdjust)
 {
-	switch (DoZProbe(1.1 * platform->AxisTotalLength(Z_AXIS)))
+	switch (DoZProbe(gb, 1.1 * platform->AxisTotalLength(Z_AXIS)))
 	{
 	case 0:		// failed
 		platform->Message(GENERIC_MESSAGE, "Error: Z probe already triggered at start of probing move\n");
@@ -1490,7 +1423,7 @@ bool GCodes::DoSingleZProbe(bool reportOnly, float heightAdjust)
 // Returns 0 if Z probe already triggered at start of probing
 // Returns 1 if Z probe didn't trigger
 // Returns 2 if success, with the current position in moveBuffer
-int GCodes::DoZProbe(float distance)
+int GCodes::DoZProbe(GCodeBuffer& gb, float distance)
 {
 	if (platform->GetZProbeType() == ZProbeTypeDelta)
 	{
@@ -1519,7 +1452,7 @@ int GCodes::DoZProbe(float distance)
 		cannedMoveType[Z_AXIS] = CannedMoveType::relative;
 		cannedFeedRate = platform->GetZProbeParameters().probeSpeed;
 
-		if (DoCannedCycleMove(ZProbeActive))
+		if (DoCannedCycleMove(gb, ZProbeActive))
 		{
 			return (zProbeTriggered) ? 2 : 1;
 		}
@@ -1536,7 +1469,7 @@ int GCodes::DoZProbe(float distance)
 // then that value is used.  If it's less than SILLY_Z_VALUE the bed is
 // probed and that value is used.
 // Call this repeatedly until it returns true.
-bool GCodes::SetSingleZProbeAtAPosition(GCodeBuffer *gb, StringRef& reply)
+bool GCodes::SetSingleZProbeAtAPosition(GCodeBuffer& gb, StringRef& reply)
 {
 	if (reprap.GetMove()->IsDeltaMode() && !AllAxesAreHomed())
 	{
@@ -1546,28 +1479,28 @@ bool GCodes::SetSingleZProbeAtAPosition(GCodeBuffer *gb, StringRef& reply)
 
 	float heightAdjust = 0.0;
 	bool dummy;
-	gb->TryGetFValue('H', heightAdjust, dummy);
+	gb.TryGetFValue('H', heightAdjust, dummy);
 
-	if (!gb->Seen('P'))
+	if (!gb.Seen('P'))
 	{
 		bool reportOnly = false;
-		if (gb->Seen('S') && gb->GetIValue() < 0)
+		if (gb.Seen('S') && gb.GetIValue() < 0)
 		{
 			reportOnly = true;
 		}
-		return DoSingleZProbe(reportOnly, heightAdjust);
+		return DoSingleZProbe(gb, reportOnly, heightAdjust);
 	}
 
-	int probePointIndex = gb->GetIValue();
+	int probePointIndex = gb.GetIValue();
 	if (probePointIndex < 0 || (unsigned int)probePointIndex >= MAX_PROBE_POINTS)
 	{
 		reprap.GetPlatform()->Message(GENERIC_MESSAGE, "Z probe point index out of range.\n");
 		return true;
 	}
 
-	float x = (gb->Seen(axisLetters[X_AXIS])) ? gb->GetFValue() : moveBuffer.coords[X_AXIS];
-	float y = (gb->Seen(axisLetters[Y_AXIS])) ? gb->GetFValue() : moveBuffer.coords[Y_AXIS];
-	float z = (gb->Seen(axisLetters[Z_AXIS])) ? gb->GetFValue() : moveBuffer.coords[Z_AXIS];
+	float x = (gb.Seen(axisLetters[X_AXIS])) ? gb.GetFValue() : moveBuffer.coords[X_AXIS];
+	float y = (gb.Seen(axisLetters[Y_AXIS])) ? gb.GetFValue() : moveBuffer.coords[Y_AXIS];
+	float z = (gb.Seen(axisLetters[Z_AXIS])) ? gb.GetFValue() : moveBuffer.coords[Z_AXIS];
 
 	reprap.GetMove()->SetXBedProbePoint(probePointIndex, x);
 	reprap.GetMove()->SetYBedProbePoint(probePointIndex, y);
@@ -1575,21 +1508,21 @@ bool GCodes::SetSingleZProbeAtAPosition(GCodeBuffer *gb, StringRef& reply)
 	if (z > SILLY_Z_VALUE)
 	{
 		reprap.GetMove()->SetZBedProbePoint(probePointIndex, z, false, false);
-		if (gb->Seen('S'))
+		if (gb.Seen('S'))
 		{
 			zProbesSet = true;
-			reprap.GetMove()->FinishedBedProbing(gb->GetIValue(), reply);
+			reprap.GetMove()->FinishedBedProbing(gb.GetIValue(), reply);
 		}
 		return true;
 	}
 	else
 	{
-		if (DoSingleZProbeAtPoint(probePointIndex, heightAdjust))
+		if (DoSingleZProbeAtPoint(gb, probePointIndex, heightAdjust))
 		{
-			if (gb->Seen('S'))
+			if (gb.Seen('S'))
 			{
 				zProbesSet = true;
-				int sParam = gb->GetIValue();
+				int sParam = gb.GetIValue();
 				if (sParam == 1)
 				{
 					// G30 with a silly Z value and S=1 is equivalent to G30 with no parameters in that it sets the current Z height
@@ -1621,22 +1554,22 @@ bool GCodes::GetProbeCoordinates(int count, float& x, float& y, float& z) const
 	return zProbesSet;
 }
 
-bool GCodes::SetPrintZProbe(GCodeBuffer* gb, StringRef& reply)
+bool GCodes::SetPrintZProbe(GCodeBuffer& gb, StringRef& reply)
 {
 	ZProbeParameters params = platform->GetZProbeParameters();
 	bool seen = false;
-	gb->TryGetFValue(axisLetters[X_AXIS], params.xOffset, seen);
-	gb->TryGetFValue(axisLetters[Y_AXIS], params.yOffset, seen);
-	gb->TryGetFValue(axisLetters[Z_AXIS], params.height, seen);
-	gb->TryGetIValue('P', params.adcValue, seen);
+	gb.TryGetFValue(axisLetters[X_AXIS], params.xOffset, seen);
+	gb.TryGetFValue(axisLetters[Y_AXIS], params.yOffset, seen);
+	gb.TryGetFValue(axisLetters[Z_AXIS], params.height, seen);
+	gb.TryGetIValue('P', params.adcValue, seen);
 
-	if (gb->Seen('C'))
+	if (gb.Seen('C'))
 	{
-		params.temperatureCoefficient = gb->GetFValue();
+		params.temperatureCoefficient = gb.GetFValue();
 		seen = true;
-		if (gb->Seen('S'))
+		if (gb.Seen('S'))
 		{
-			params.calibTemperature = gb->GetFValue();
+			params.calibTemperature = gb.GetFValue();
 		}
 		else
 		{
@@ -1704,7 +1637,7 @@ void GCodes::GetCurrentCoordinates(StringRef& s) const
 	}
 }
 
-bool GCodes::OpenFileToWrite(const char* directory, const char* fileName, GCodeBuffer *gb)
+bool GCodes::OpenFileToWrite(GCodeBuffer& gb, const char* directory, const char* fileName)
 {
 	fileBeingWritten = platform->GetFileStore(directory, fileName, true);
 	eofStringCounter = 0;
@@ -1715,12 +1648,12 @@ bool GCodes::OpenFileToWrite(const char* directory, const char* fileName, GCodeB
 	}
 	else
 	{
-		gb->SetWritingFileDirectory(directory);
+		gb.SetWritingFileDirectory(directory);
 		return true;
 	}
 }
 
-void GCodes::WriteHTMLToFile(char b, GCodeBuffer *gb)
+void GCodes::WriteHTMLToFile(GCodeBuffer& gb, char b)
 {
 	if (fileBeingWritten == NULL)
 	{
@@ -1741,7 +1674,7 @@ void GCodes::WriteHTMLToFile(char b, GCodeBuffer *gb)
 		{
 			fileBeingWritten->Close();
 			fileBeingWritten = NULL;
-			gb->SetWritingFileDirectory(NULL);
+			gb.SetWritingFileDirectory(NULL);
 			const char* r = (platform->Emulating() == marlin) ? "Done saving file." : "";
 			HandleReply(gb, false, r);
 			return;
@@ -1755,7 +1688,7 @@ void GCodes::WriteHTMLToFile(char b, GCodeBuffer *gb)
 	}
 }
 
-void GCodes::WriteGCodeToFile(GCodeBuffer *gb)
+void GCodes::WriteGCodeToFile(GCodeBuffer& gb)
 {
 	if (fileBeingWritten == NULL)
 	{
@@ -1764,13 +1697,13 @@ void GCodes::WriteGCodeToFile(GCodeBuffer *gb)
 	}
 
 	// End of file?
-	if (gb->Seen('M'))
+	if (gb.Seen('M'))
 	{
-		if (gb->GetIValue() == 29)
+		if (gb.GetIValue() == 29)
 		{
 			fileBeingWritten->Close();
 			fileBeingWritten = NULL;
-			gb->SetWritingFileDirectory(NULL);
+			gb.SetWritingFileDirectory(NULL);
 			const char* r = (platform->Emulating() == marlin) ? "Done saving file." : "";
 			HandleReply(gb, false, r);
 			return;
@@ -1778,20 +1711,20 @@ void GCodes::WriteGCodeToFile(GCodeBuffer *gb)
 	}
 
 	// Resend request?
-	if (gb->Seen('G'))
+	if (gb.Seen('G'))
 	{
-		if (gb->GetIValue() == 998)
+		if (gb.GetIValue() == 998)
 		{
-			if (gb->Seen('P'))
+			if (gb.Seen('P'))
 			{
-				scratchString.printf("%d\n", gb->GetIValue());
+				scratchString.printf("%d\n", gb.GetIValue());
 				HandleReply(gb, false, scratchString.Pointer());
 				return;
 			}
 		}
 	}
 
-	fileBeingWritten->Write(gb->Buffer());
+	fileBeingWritten->Write(gb.Buffer());
 	fileBeingWritten->Write('\n');
 	HandleReply(gb, false, "");
 }
@@ -1836,16 +1769,16 @@ void GCodes::DeleteFile(const char* fileName)
 }
 
 // Function to handle dwell delays.  Return true for dwell finished, false otherwise.
-bool GCodes::DoDwell(GCodeBuffer *gb)
+bool GCodes::DoDwell(GCodeBuffer& gb)
 {
 	float dwell;
-	if (gb->Seen('S'))
+	if (gb.Seen('S'))
 	{
-		dwell = gb->GetFValue();
+		dwell = gb.GetFValue();
 	}
-	else if (gb->Seen('P'))
+	else if (gb.Seen('P'))
 	{
-		dwell = 0.001 * (float) gb->GetIValue(); // P values are in milliseconds; we need seconds
+		dwell = 0.001 * (float) gb.GetIValue(); // P values are in milliseconds; we need seconds
 	}
 	else
 	{
@@ -1856,12 +1789,12 @@ bool GCodes::DoDwell(GCodeBuffer *gb)
 	// Deal with a Roland configuration
 	if (reprap.GetRoland()->Active())
 	{
-		return reprap.GetRoland()->ProcessDwell(gb->GetLValue());
+		return reprap.GetRoland()->ProcessDwell(gb.GetLValue());
 	}
 #endif
 
 	// Wait for all the queued moves to stop
-	if (!AllMovesAreFinishedAndMoveBufferIsLoaded())
+	if (!LockMovementAndWaitForStandstill(gb))
 	{
 		return false;
 	}
@@ -1898,17 +1831,17 @@ bool GCodes::DoDwellTime(float dwell)
 }
 
 // Set offset, working and standby temperatures for a tool. I.e. handle a G10.
-void GCodes::SetOrReportOffsets(StringRef& reply, GCodeBuffer *gb)
+bool GCodes::SetOrReportOffsets(GCodeBuffer &gb, StringRef& reply)
 {
-	if (gb->Seen('P'))
+	if (gb.Seen('P'))
 	{
-		int8_t toolNumber = gb->GetIValue();
-		toolNumber += gb->GetToolNumberAdjust();
+		int8_t toolNumber = gb.GetIValue();
+		toolNumber += gb.GetToolNumberAdjust();
 		Tool* tool = reprap.GetTool(toolNumber);
 		if (tool == NULL)
 		{
 			reply.printf("Attempt to set/report offsets and temperatures for non-existent tool: %d", toolNumber);
-			return;
+			return true;
 		}
 
 		// Deal with setting offsets
@@ -1921,10 +1854,14 @@ void GCodes::SetOrReportOffsets(StringRef& reply, GCodeBuffer *gb)
 		bool settingOffset = false;
 		for (size_t axis = 0; axis < numAxes; ++axis)
 		{
-			gb->TryGetFValue(axisLetters[axis], offset[axis], settingOffset);
+			gb.TryGetFValue(axisLetters[axis], offset[axis], settingOffset);
 		}
 		if (settingOffset)
 		{
+			if (!LockMovement(gb))
+			{
+				return false;
+			}
 			tool->SetOffset(offset);
 		}
 
@@ -1936,14 +1873,14 @@ void GCodes::SetOrReportOffsets(StringRef& reply, GCodeBuffer *gb)
 		if (hCount > 0)
 		{
 			tool->GetVariables(standby, active);
-			if (gb->Seen('R'))
+			if (gb.Seen('R'))
 			{
-				gb->GetFloatArray(standby, hCount, true);
+				gb.GetFloatArray(standby, hCount, true);
 				settingTemps = true;
 			}
-			if (gb->Seen('S'))
+			if (gb.Seen('S'))
 			{
-				gb->GetFloatArray(active, hCount, true);
+				gb.GetFloatArray(active, hCount, true);
 				settingTemps = true;
 			}
 
@@ -1971,24 +1908,25 @@ void GCodes::SetOrReportOffsets(StringRef& reply, GCodeBuffer *gb)
 			}
 		}
 	}
+	return true;
 }
 
-void GCodes::ManageTool(GCodeBuffer *gb, StringRef& reply)
+void GCodes::ManageTool(GCodeBuffer& gb, StringRef& reply)
 {
-	if (!gb->Seen('P'))
+	if (!gb.Seen('P'))
 	{
 		// DC temporary code to allow tool numbers to be adjusted so that we don't need to edit multi-media files generated by slic3r
-		if (gb->Seen('S'))
+		if (gb.Seen('S'))
 		{
-			int adjust = gb->GetIValue();
-			gb->SetToolNumberAdjust(adjust);
+			int adjust = gb.GetIValue();
+			gb.SetToolNumberAdjust(adjust);
 		}
 		return;
 	}
 
 	// Check tool number
 	bool seen = false;
-	const int toolNumber = gb->GetIValue();
+	const int toolNumber = gb.GetIValue();
 	if (toolNumber < 0)
 	{
 		platform->Message(GENERIC_MESSAGE, "Tool number must be positive!\n");
@@ -1998,9 +1936,9 @@ void GCodes::ManageTool(GCodeBuffer *gb, StringRef& reply)
 	// Check drives
 	long drives[MaxExtruders];  		// There can never be more than we have...
 	size_t dCount = numExtruders;	// Sets the limit and returns the count
-	if (gb->Seen('D'))
+	if (gb.Seen('D'))
 	{
-		gb->GetLongArray(drives, dCount);
+		gb.GetLongArray(drives, dCount);
 		seen = true;
 	}
 	else
@@ -2011,9 +1949,9 @@ void GCodes::ManageTool(GCodeBuffer *gb, StringRef& reply)
 	// Check heaters
 	long heaters[HEATERS];
 	size_t hCount = HEATERS;
-	if (gb->Seen('H'))
+	if (gb.Seen('H'))
 	{
-		gb->GetLongArray(heaters, hCount);
+		gb.GetLongArray(heaters, hCount);
 		seen = true;
 	}
 	else
@@ -2024,9 +1962,9 @@ void GCodes::ManageTool(GCodeBuffer *gb, StringRef& reply)
 	// Check X axis mapping
 	long xMapping[MAX_AXES];
 	size_t xCount = numAxes;
-	if (gb->Seen('X'))
+	if (gb.Seen('X'))
 	{
-		gb->GetLongArray(xMapping, xCount);
+		gb.GetLongArray(xMapping, xCount);
 		seen = true;
 	}
 	else
@@ -2037,11 +1975,11 @@ void GCodes::ManageTool(GCodeBuffer *gb, StringRef& reply)
 
 	// Check for fan mapping
 	uint32_t fanMap;
-	if (gb->Seen('F'))
+	if (gb.Seen('F'))
 	{
 		long fanMapping[NUM_FANS];
 		size_t fanCount = NUM_FANS;
-		gb->GetLongArray(fanMapping, fanCount);
+		gb.GetLongArray(fanMapping, fanCount);
 		fanMap = 0;
 		for (size_t i = 0; i < fanCount; ++i)
 		{
@@ -2094,10 +2032,10 @@ void GCodes::DisableDrives()
 }
 
 // Does what it says.
-void GCodes::SetEthernetAddress(GCodeBuffer *gb, int mCode)
+void GCodes::SetEthernetAddress(GCodeBuffer& gb, int mCode)
 {
 	byte eth[4];
-	const char* ipString = gb->GetString();
+	const char* ipString = gb.GetString();
 	uint8_t sp = 0;
 	uint8_t spp = 0;
 	uint8_t ipp = 0;
@@ -2109,7 +2047,7 @@ void GCodes::SetEthernetAddress(GCodeBuffer *gb, int mCode)
 			ipp++;
 			if (ipp > 3)
 			{
-				platform->MessageF(GENERIC_MESSAGE, "Dud IP address: %s\n", gb->Buffer());
+				platform->MessageF(GENERIC_MESSAGE, "Dud IP address: %s\n", gb.Buffer());
 				return;
 			}
 			sp++;
@@ -2141,14 +2079,14 @@ void GCodes::SetEthernetAddress(GCodeBuffer *gb, int mCode)
 	}
 	else
 	{
-		platform->MessageF(GENERIC_MESSAGE, "Dud IP address: %s\n", gb->Buffer());
+		platform->MessageF(GENERIC_MESSAGE, "Dud IP address: %s\n", gb.Buffer());
 	}
 }
 
-void GCodes::SetMACAddress(GCodeBuffer *gb)
+void GCodes::SetMACAddress(GCodeBuffer& gb)
 {
 	uint8_t mac[6];
-	const char* ipString = gb->GetString();
+	const char* ipString = gb.GetString();
 	uint8_t sp = 0;
 	uint8_t spp = 0;
 	uint8_t ipp = 0;
@@ -2160,7 +2098,7 @@ void GCodes::SetMACAddress(GCodeBuffer *gb)
 			ipp++;
 			if (ipp > 5)
 			{
-				platform->MessageF(GENERIC_MESSAGE, "Dud MAC address: %s\n", gb->Buffer());
+				platform->MessageF(GENERIC_MESSAGE, "Dud MAC address: %s\n", gb.Buffer());
 				return;
 			}
 			sp++;
@@ -2178,7 +2116,7 @@ void GCodes::SetMACAddress(GCodeBuffer *gb)
 	}
 	else
 	{
-		platform->MessageF(GENERIC_MESSAGE, "Dud MAC address: %s\n", gb->Buffer());
+		platform->MessageF(GENERIC_MESSAGE, "Dud MAC address: %s\n", gb.Buffer());
 	}
 }
 
@@ -2222,38 +2160,38 @@ void GCodes::SetMappedFanSpeed()
 // Handle sending a reply back to the appropriate interface(s).
 // Note that 'reply' may be empty. If it isn't, then we need to append newline when sending it.
 // Also, gb may be null if we were executing a trigger macro.
-void GCodes::HandleReply(GCodeBuffer *gb, bool error, const char* reply)
+void GCodes::HandleReply(GCodeBuffer& gb, bool error, const char* reply)
 {
 	// Don't report "ok" responses if a (macro) file is being processed
 	// Also check that this response was triggered by a gcode
-	if (gb == nullptr || ((gb == fileMacroGCode || gb == fileGCode) && reply[0] == 0))
+	if ((gb.MachineState().doingFileMacro || &gb == fileGCode) && reply[0] == 0)
 	{
 		return;
 	}
 
 	// Second UART device, e.g. dc42's PanelDue. Do NOT use emulation for this one!
-	if (gb == auxGCode || (stackPointer != 0 && stack[0].gb == auxGCode))
+	if (&gb == auxGCode)
 	{
 		platform->AppendAuxReply(reply);
 		return;
 	}
 
-	const Compatibility c = (gb == serialGCode || gb == telnetGCode) ? platform->Emulating() : me;
+	const Compatibility c = (&gb == serialGCode || &gb == telnetGCode) ? platform->Emulating() : me;
 	MessageType type = GENERIC_MESSAGE;
-	if (gb == httpGCode)
+	if (&gb == httpGCode)
 	{
 		type = HTTP_MESSAGE;
 	}
-	else if (gb == telnetGCode)
+	else if (&gb == telnetGCode)
 	{
 		type = TELNET_MESSAGE;
 	}
-	else if (gb == serialGCode)
+	else if (&gb == serialGCode)
 	{
 		type = HOST_MESSAGE;
 	}
 
-	const char* response = (gb->Seen('M') && gb->GetIValue() == 998) ? "rs " : "ok";
+	const char* response = (gb.Seen('M') && gb.GetIValue() == 998) ? "rs " : "ok";
 	const char* emulationType = 0;
 
 	switch (c)
@@ -2270,7 +2208,7 @@ void GCodes::HandleReply(GCodeBuffer *gb, bool error, const char* reply)
 
 		case marlin:
 			// We don't need to handle M20 here because we always allocate an output buffer for that one
-			if (gb->Seen('M') && gb->GetIValue() == 28)
+			if (gb.Seen('M') && gb.GetIValue() == 28)
 			{
 				platform->Message(type, response);
 				platform->Message(type, "\n");
@@ -2279,7 +2217,7 @@ void GCodes::HandleReply(GCodeBuffer *gb, bool error, const char* reply)
 				return;
 			}
 
-			if ((gb->Seen('M') && gb->GetIValue() == 105) || (gb->Seen('M') && gb->GetIValue() == 998))
+			if ((gb.Seen('M') && gb.GetIValue() == 105) || (gb.Seen('M') && gb.GetIValue() == 998))
 			{
 				platform->Message(type, response);
 				platform->Message(type, " ");
@@ -2288,7 +2226,7 @@ void GCodes::HandleReply(GCodeBuffer *gb, bool error, const char* reply)
 				return;
 			}
 
-			if (reply[0] != 0 && !DoingFileMacro())
+			if (reply[0] != 0 && !gb.IsDoingFileMacro())
 			{
 				platform->Message(type, reply);
 				platform->Message(type, "\n");
@@ -2326,37 +2264,37 @@ void GCodes::HandleReply(GCodeBuffer *gb, bool error, const char* reply)
 	}
 }
 
-void GCodes::HandleReply(GCodeBuffer *gb, bool error, OutputBuffer *reply)
+void GCodes::HandleReply(GCodeBuffer& gb, bool error, OutputBuffer *reply)
 {
 	// Although unlikely, it's possible that we get a nullptr reply. Don't proceed if this is the case
-	if (gb == nullptr || reply == nullptr)
+	if (reply == nullptr)
 	{
 		return;
 	}
 
 	// Second UART device, e.g. dc42's PanelDue. Do NOT use emulation for this one!
-	if (gb == auxGCode || (stackPointer != 0 && stack[0].gb == auxGCode))
+	if (&gb == auxGCode)
 	{
 		platform->AppendAuxReply(reply);
 		return;
 	}
 
-	const Compatibility c = (gb == serialGCode || gb == telnetGCode) ? platform->Emulating() : me;
+	const Compatibility c = (&gb == serialGCode || &gb == telnetGCode) ? platform->Emulating() : me;
 	MessageType type = GENERIC_MESSAGE;
-	if (gb == httpGCode)
+	if (&gb == httpGCode)
 	{
 		type = HTTP_MESSAGE;
 	}
-	else if (gb == telnetGCode)
+	else if (&gb == telnetGCode)
 	{
 		type = TELNET_MESSAGE;
 	}
-	else if (gb == serialGCode)
+	else if (&gb == serialGCode)
 	{
 		type = HOST_MESSAGE;
 	}
 
-	const char* response = (gb->Seen('M') && gb->GetIValue() == 998) ? "rs " : "ok";
+	const char* response = (gb.Seen('M') && gb.GetIValue() == 998) ? "rs " : "ok";
 	const char* emulationType = nullptr;
 
 	switch (c)
@@ -2371,7 +2309,7 @@ void GCodes::HandleReply(GCodeBuffer *gb, bool error, OutputBuffer *reply)
 			return;
 
 		case marlin:
-			if (gb->Seen('M') && gb->GetIValue() == 20)
+			if (gb.Seen('M') && gb.GetIValue() == 20)
 			{
 				platform->Message(type, "Begin file list\n");
 				platform->Message(type, reply);
@@ -2381,7 +2319,7 @@ void GCodes::HandleReply(GCodeBuffer *gb, bool error, OutputBuffer *reply)
 				return;
 			}
 
-			if (gb->Seen('M') && gb->GetIValue() == 28)
+			if (gb.Seen('M') && gb.GetIValue() == 28)
 			{
 				platform->Message(type, response);
 				platform->Message(type, "\n");
@@ -2389,7 +2327,7 @@ void GCodes::HandleReply(GCodeBuffer *gb, bool error, OutputBuffer *reply)
 				return;
 			}
 
-			if ((gb->Seen('M') && gb->GetIValue() == 105) || (gb->Seen('M') && gb->GetIValue() == 998))
+			if ((gb.Seen('M') && gb.GetIValue() == 105) || (gb.Seen('M') && gb.GetIValue() == 998))
 			{
 				platform->Message(type, response);
 				platform->Message(type, " ");
@@ -2397,7 +2335,7 @@ void GCodes::HandleReply(GCodeBuffer *gb, bool error, OutputBuffer *reply)
 				return;
 			}
 
-			if (reply->Length() != 0 && !DoingFileMacro())
+			if (reply->Length() != 0 && !gb.IsDoingFileMacro())
 			{
 				platform->Message(type, reply);
 				platform->Message(type, "\n");
@@ -2438,22 +2376,22 @@ void GCodes::HandleReply(GCodeBuffer *gb, bool error, OutputBuffer *reply)
 }
 
 // Set PID parameters (M301 or M304 command). 'heater' is the default heater number to use.
-void GCodes::SetPidParameters(GCodeBuffer *gb, int heater, StringRef& reply)
+void GCodes::SetPidParameters(GCodeBuffer& gb, int heater, StringRef& reply)
 {
-	if (gb->Seen('H'))
+	if (gb.Seen('H'))
 	{
-		heater = gb->GetIValue();
+		heater = gb.GetIValue();
 	}
 
 	if (heater >= 0 && heater < HEATERS)
 	{
 		PidParameters pp = platform->GetPidParameters(heater);
 		bool seen = false;
-		gb->TryGetFValue('P', pp.kP, seen);
-		gb->TryGetFValue('I', pp.kI, seen);
-		gb->TryGetFValue('D', pp.kD, seen);
-		gb->TryGetFValue('T', pp.kT, seen);
-		gb->TryGetFValue('S', pp.kS, seen);
+		gb.TryGetFValue('P', pp.kP, seen);
+		gb.TryGetFValue('I', pp.kI, seen);
+		gb.TryGetFValue('D', pp.kD, seen);
+		gb.TryGetFValue('T', pp.kT, seen);
+		gb.TryGetFValue('S', pp.kS, seen);
 
 		if (seen)
 		{
@@ -2467,11 +2405,11 @@ void GCodes::SetPidParameters(GCodeBuffer *gb, int heater, StringRef& reply)
 	}
 }
 
-void GCodes::SetHeaterParameters(GCodeBuffer *gb, StringRef& reply)
+void GCodes::SetHeaterParameters(GCodeBuffer& gb, StringRef& reply)
 {
-	if (gb->Seen('P'))
+	if (gb.Seen('P'))
 	{
-		int heater = gb->GetIValue();
+		int heater = gb.GetIValue();
 		if (heater >= 0 && heater < HEATERS)
 		{
 			Thermistor& th = platform->GetThermistor(heater);
@@ -2483,29 +2421,29 @@ void GCodes::SetHeaterParameters(GCodeBuffer *gb, StringRef& reply)
 			float shC = th.GetShc();
 			float seriesR = th.GetSeriesR();
 
-			gb->TryGetFValue('T', r25, seen);
-			gb->TryGetFValue('B', beta, seen);
-			gb->TryGetFValue('C', shC, seen);
-			gb->TryGetFValue('R', seriesR, seen);
+			gb.TryGetFValue('T', r25, seen);
+			gb.TryGetFValue('B', beta, seen);
+			gb.TryGetFValue('C', shC, seen);
+			gb.TryGetFValue('R', seriesR, seen);
 			if (seen)
 			{
 				th.SetParameters(r25, beta, shC, seriesR);
 			}
 
-			if (gb->Seen('L'))
+			if (gb.Seen('L'))
 			{
-				th.SetLowOffset((int8_t)constrain<int>(gb->GetIValue(), -100, 100));
+				th.SetLowOffset((int8_t)constrain<int>(gb.GetIValue(), -100, 100));
 				seen = true;
 			}
-			if (gb->Seen('H'))
+			if (gb.Seen('H'))
 			{
-				th.SetHighOffset((int8_t)constrain<int>(gb->GetIValue(), -100, 100));
+				th.SetHighOffset((int8_t)constrain<int>(gb.GetIValue(), -100, 100));
 				seen = true;
 			}
 
-			if (gb->Seen('X'))
+			if (gb.Seen('X'))
 			{
-				int thermistor = gb->GetIValue();
+				int thermistor = gb.GetIValue();
 				if (   (0 <= thermistor && thermistor < HEATERS)
 					|| ((int)FirstThermocoupleChannel <= thermistor && thermistor < (int)(FirstThermocoupleChannel + MaxSpiTempSensors))
 					|| ((int)FirstRtdChannel <= thermistor && thermistor < (int)(FirstRtdChannel + MaxSpiTempSensors))
@@ -2598,33 +2536,31 @@ bool GCodes::RetractFilament(bool retract)
 // If the code to act on is completed, this returns true,
 // otherwise false.  It is called repeatedly for a given
 // code until it returns true for that code.
-bool GCodes::ActOnCode(GCodeBuffer *gb, StringRef& reply)
+bool GCodes::ActOnCode(GCodeBuffer& gb, StringRef& reply)
 {
 	// Discard empty buffers right away
-	if (gb->IsEmpty())
+	if (gb.IsEmpty())
 	{
 		return true;
 	}
 
 	// Can we queue this code?
-	if (gb == queuedGCode || doingFileMacro || !codeQueue->QueueCode(gb))
+	if (&gb == queuedGCode || DoingFileMacro() || !codeQueue->QueueCode(gb))
 	{
-		gbCurrent = gb;
-
 		// M-code parameters might contain letters T and G, e.g. in filenames.
 		// dc42 assumes that G-and T-code parameters never contain the letter M.
 		// Therefore we must check for an M-code first.
-		if (gb->Seen('M'))
+		if (gb.Seen('M'))
 		{
 			return HandleMcode(gb, reply);
 		}
 		// dc42 doesn't think a G-code parameter ever contains letter T, or a T-code ever contains letter G.
 		// So it doesn't matter in which order we look for them.
-		if (gb->Seen('G'))
+		if (gb.Seen('G'))
 		{
 			return HandleGcode(gb, reply);
 		}
-		if (gb->Seen('T'))
+		if (gb.Seen('T'))
 		{
 			return HandleTcode(gb, reply);
 		}
@@ -2635,12 +2571,12 @@ bool GCodes::ActOnCode(GCodeBuffer *gb, StringRef& reply)
 	return true;
 }
 
-bool GCodes::HandleGcode(GCodeBuffer* gb, StringRef& reply)
+bool GCodes::HandleGcode(GCodeBuffer& gb, StringRef& reply)
 {
 	bool result = true;
 	bool error = false;
 
-	int code = gb->GetIValue();
+	int code = gb.GetIValue();
 	if (simulationMode != 0 && code != 0 && code != 1 && code != 4 && code != 10 && code != 20 && code != 21 && code != 90 && code != 91 && code != 92)
 	{
 		return true;			// we only simulate some gcodes
@@ -2650,12 +2586,16 @@ bool GCodes::HandleGcode(GCodeBuffer* gb, StringRef& reply)
 	{
 	case 0: // There are no rapid moves...
 	case 1: // Ordinary move
+		if (!LockMovement(gb))
+		{
+			return false;
+		}
 		{
 			// Check for 'R' parameter here to go back to the coordinates at which the print was paused
 			// NOTE: restore point 2 (tool change) won't work when changing tools on dual axis machines because of X axis mapping.
 			// We could possibly fix this by saving the virtual X axis position instead of the physical axis positions.
 			// However, slicers normally command the tool to the correct place after a tool change, so we don't need this feature anyway.
-			int rParam = (gb->Seen('R')) ? gb->GetIValue() : 0;
+			int rParam = (gb.Seen('R')) ? gb.GetIValue() : 0;
 			RestorePoint *rp = (rParam == 1) ? &pauseRestorePoint : (rParam == 2) ? &toolChangeRestorePoint : nullptr;
 			if (rp != nullptr)
 			{
@@ -2665,7 +2605,7 @@ bool GCodes::HandleGcode(GCodeBuffer* gb, StringRef& reply)
 				}
 				for (size_t axis = 0; axis < numAxes; ++axis)
 				{
-					float offset = gb->Seen(axisLetters[axis]) ? gb->GetFValue() * distanceScale : 0.0;
+					float offset = gb.Seen(axisLetters[axis]) ? gb.GetFValue() * distanceScale : 0.0;
 					moveBuffer.coords[axis] = rp->moveCoords[axis] + offset;
 				}
 				// For now we don't handle extrusion at the same time
@@ -2673,7 +2613,7 @@ bool GCodes::HandleGcode(GCodeBuffer* gb, StringRef& reply)
 				{
 					moveBuffer.coords[drive] = 0.0;
 				}
-				moveBuffer.feedRate = (gb->Seen(feedrateLetter)) ? gb->GetFValue() : feedRate;
+				moveBuffer.feedRate = (gb.Seen(feedrateLetter)) ? gb.GetFValue() : feedRate;
 				moveBuffer.filePos = noFilePosition;
 				moveBuffer.usePressureAdvance = false;
 				moveAvailable = true;
@@ -2683,7 +2623,7 @@ bool GCodes::HandleGcode(GCodeBuffer* gb, StringRef& reply)
 				int res = SetUpMove(gb, reply);
 				if (res == 2)
 				{
-					state = GCodeState::waitingForMoveToComplete;
+					gb.MachineState().state = GCodeState::waitingForMoveToComplete;
 				}
 				result = (res != 0);
 			}
@@ -2695,17 +2635,28 @@ bool GCodes::HandleGcode(GCodeBuffer* gb, StringRef& reply)
 		break;
 
 	case 10: // Set/report offsets and temperatures, or retract
-		if (gb->Seen('P'))
+		if (gb.Seen('P'))
 		{
-			SetOrReportOffsets(reply, gb);
+			if (!SetOrReportOffsets(gb, reply))
+			{
+				return false;
+			}
 		}
 		else
 		{
+			if (!LockMovement(gb))
+			{
+				return false;
+			}
 			result = RetractFilament(true);
 		}
 		break;
 
 	case 11: // Un-retract
+		if (!LockMovement(gb))
+		{
+			return false;
+		}
 		result = RetractFilament(false);
 		break;
 
@@ -2722,7 +2673,7 @@ bool GCodes::HandleGcode(GCodeBuffer* gb, StringRef& reply)
 		break;
 
 	case 30: // Z probe/manually set at a position and set that as point P
-		if (!AllMovesAreFinishedAndMoveBufferIsLoaded())
+		if (!LockMovementAndWaitForStandstill(gb))
 		{
 			return false;
 		}
@@ -2738,7 +2689,7 @@ bool GCodes::HandleGcode(GCodeBuffer* gb, StringRef& reply)
 		break;
 
 	case 31: // Return the probe value, or set probe variables
-		if (!AllMovesAreFinishedAndMoveBufferIsLoaded())
+		if (!LockMovementAndWaitForStandstill(gb))
 		{
 			return false;
 		}
@@ -2746,18 +2697,18 @@ bool GCodes::HandleGcode(GCodeBuffer* gb, StringRef& reply)
 		break;
 
 	case 32: // Probe Z at multiple positions and generate the bed transform
-		if (!AllMovesAreFinishedAndMoveBufferIsLoaded())
+		if (!LockMovementAndWaitForStandstill(gb))
 		{
 			return false;
 		}
 
 		// Try to execute bed.g
-		if (!DoFileMacro(BED_EQUATION_G, reprap.GetMove()->IsDeltaMode()))
+		if (!DoFileMacro(gb, BED_EQUATION_G, reprap.GetMove()->IsDeltaMode()))
 		{
 			// If we get here then we are not on a delta printer and there is no bed.g file
 			if (GetAxisIsHomed(X_AXIS) && GetAxisIsHomed(Y_AXIS))
 			{
-				state = GCodeState::setBed1;		// no bed.g file, so use the coordinates specified by M557
+				gb.MachineState().state = GCodeState::setBed1;		// no bed.g file, so use the coordinates specified by M557
 			}
 			else
 			{
@@ -2769,15 +2720,11 @@ bool GCodes::HandleGcode(GCodeBuffer* gb, StringRef& reply)
 		break;
 
 	case 90: // Absolute coordinates
-		// DC 2014-07-21 we no longer change the extruder settings in response to G90/G91 commands
-		//drivesRelative = false;
-		axesRelative = false;
+		gb.MachineState().axesRelative = false;
 		break;
 
 	case 91: // Relative coordinates
-		// DC 2014-07-21 we no longer change the extruder settings in response to G90/G91 commands
-		//drivesRelative = true; // Non-axis movements (i.e. extruders)
-		axesRelative = true;   // Axis movements (i.e. X, Y and Z)
+		gb.MachineState().axesRelative = true;   // Axis movements (i.e. X, Y and Z)
 		break;
 
 	case 92: // Set position
@@ -2786,21 +2733,23 @@ bool GCodes::HandleGcode(GCodeBuffer* gb, StringRef& reply)
 
 	default:
 		error = true;
-		reply.printf("invalid G Code: %s", gb->Buffer());
+		reply.printf("invalid G Code: %s", gb.Buffer());
 	}
-	if (result && state == GCodeState::normal)
+
+	if (result && gb.MachineState().state == GCodeState::normal)
 	{
+		UnlockAll(gb);
 		HandleReply(gb, error, reply.Pointer());
 	}
 	return result;
 }
 
-bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
+bool GCodes::HandleMcode(GCodeBuffer& gb, StringRef& reply)
 {
 	bool result = true;
 	bool error = false;
 
-	int code = gb->GetIValue();
+	int code = gb.GetIValue();
 	if (simulationMode != 0 && (code < 20 || code > 37) && code != 0 && code != 1 && code != 82 && code != 83 && code != 105 && code != 111 && code != 112 && code != 122 && code != 408 && code != 999)
 	{
 		return true;			// we don't yet simulate most M codes
@@ -2810,7 +2759,7 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 	{
 	case 0: // Stop
 	case 1: // Sleep
-		if (!AllMovesAreFinishedAndMoveBufferIsLoaded())
+		if (!LockMovementAndWaitForStandstill(gb))
 		{
 			return false;
 		}
@@ -2823,7 +2772,7 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 				// If we are cancelling a paused print with M0 and cancel.g exists then run it and do nothing else
 				if (code == 0)
 				{
-					if (DoFileMacro(CANCEL_G, false))
+					if (DoFileMacro(gb, CANCEL_G, false))
 					{
 						break;
 					}
@@ -2831,17 +2780,17 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 			}
 		}
 
-		state = (code == 0) ? GCodeState::stopping : GCodeState::sleeping;
-		DoFileMacro((code == 0) ? STOP_G : SLEEP_G, false);
+		gb.MachineState().state = (code == 0) ? GCodeState::stopping : GCodeState::sleeping;
+		DoFileMacro(gb, (code == 0) ? STOP_G : SLEEP_G, false);
 		break;
 
 #if SUPPORT_ROLAND
 	case 3: // Spin spindle
 		if (reprap.GetRoland()->Active())
 		{
-			if (gb->Seen('S'))
+			if (gb.Seen('S'))
 			{
-				result = reprap.GetRoland()->ProcessSpindle(gb->GetFValue());
+				result = reprap.GetRoland()->ProcessSpindle(gb.GetFValue());
 			}
 		}
 		break;
@@ -2849,7 +2798,7 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 
 	case 18: // Motors off
 	case 84:
-		if (!AllMovesAreFinishedAndMoveBufferIsLoaded())
+		if (!LockMovementAndWaitForStandstill(gb))
 		{
 			return false;
 		}
@@ -2857,7 +2806,7 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 			bool seen = false;
 			for (size_t axis = 0; axis < numAxes; axis++)
 			{
-				if (gb->Seen(axisLetters[axis]))
+				if (gb.Seen(axisLetters[axis]))
 				{
 					SetAxisNotHomed(axis);
 					platform->DisableDrive(axis);
@@ -2865,11 +2814,11 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 				}
 			}
 
-			if (gb->Seen(extrudeLetter))
+			if (gb.Seen(extrudeLetter))
 			{
 				long int eDrive[MaxExtruders];
 				size_t eCount = numExtruders;
-				gb->GetLongArray(eDrive, eCount);
+				gb.GetLongArray(eDrive, eCount);
 				for (size_t i = 0; i < eCount; i++)
 				{
 					seen = true;
@@ -2883,11 +2832,11 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 				}
 			}
 
-			if (gb->Seen('S'))
+			if (gb.Seen('S'))
 			{
 				seen = true;
 
-				float idleTimeout = gb->GetFValue();
+				float idleTimeout = gb.GetFValue();
 				if (idleTimeout < 0.0)
 				{
 					reply.copy("Idle timeouts cannot be negative!");
@@ -2907,10 +2856,14 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		break;
 
 	case 20:		// List files on SD card
+		if (!LockFileSystem(gb))		// don't allow more than one at a time to avoid contention on output buffers
+		{
+			return false;
+		}
 		{
 			OutputBuffer *fileResponse;
-			int sparam = (gb->Seen('S')) ? gb->GetIValue() : 0;
-			const char* dir = (gb->Seen('P')) ? gb->GetString() : platform->GetGCodeDir();
+			const int sparam = (gb.Seen('S')) ? gb.GetIValue() : 0;
+			const char* dir = (gb.Seen('P')) ? gb.GetString() : platform->GetGCodeDir();
 
 			if (sparam == 2)
 			{
@@ -2934,7 +2887,7 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 					fileResponse->copy("GCode files:\n");
 				}
 
-				bool encapsulateList = ((gb != serialGCode && gb != telnetGCode) || platform->Emulating() != marlin);
+				bool encapsulateList = ((&gb != serialGCode && &gb != telnetGCode) || platform->Emulating() != marlin);
 				FileInfo fileInfo;
 				if (platform->GetMassStorage()->FindFirst(dir, fileInfo))
 				{
@@ -2962,46 +2915,55 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 				}
 			}
 
+			UnlockAll(gb);
 			HandleReply(gb, false, fileResponse);
 			return true;
 		}
 
 	case 21: // Initialise SD card
+		if (!LockFileSystem(gb))		// don't allow more than one at a time to avoid contention on output buffers
 		{
-			size_t card = (gb->Seen('P')) ? gb->GetIValue() : 0;
+			return false;
+		}
+		{
+			size_t card = (gb.Seen('P')) ? gb.GetIValue() : 0;
 			result = platform->GetMassStorage()->Mount(card, reply, true);
 		}
 		break;
 
 	case 22: // Release SD card
+		if (!LockFileSystem(gb))		// don't allow more than one at a time to avoid contention on output buffers
 		{
-			size_t card = (gb->Seen('P')) ? gb->GetIValue() : 0;
+			return false;
+		}
+		{
+			size_t card = (gb.Seen('P')) ? gb.GetIValue() : 0;
 			result = platform->GetMassStorage()->Unmount(card, reply);
 		}
 		break;
 
 	case 23: // Set file to print
 	case 32: // Select file and start SD print
-		if (isPaused)
+		if (fileGCode->OriginalMachineState().fileState.IsLive())
 		{
-			reply.copy("Cannot set file to print, because another print is still paused. Run M0 or M1 first.");
+			reply.copy("Cannot set file to print, because a file is already being printed");
+			error = true;
 			break;
 		}
 
-		if (code == 32 && !AllMovesAreFinishedAndMoveBufferIsLoaded())
+		if (code == 32 && !LockMovementAndWaitForStandstill(gb))
 		{
 			return false;
 		}
-
 		{
-			const char* filename = gb->GetUnprecedentedString();
+			const char* filename = gb.GetUnprecedentedString();
 			if (filename != nullptr)
 			{
 				QueueFileToPrint(filename);
 				if (fileToPrint.IsLive())
 				{
 					reprap.GetPrintMonitor()->StartingPrint(filename);
-					if (platform->Emulating() == marlin && (gb == serialGCode || gb == telnetGCode))
+					if (platform->Emulating() == marlin && (&gb == serialGCode || &gb == telnetGCode))
 					{
 						reply.copy("File opened\nFile selected");
 					}
@@ -3013,7 +2975,7 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 
 					if (code == 32)
 					{
-						fileBeingPrinted.MoveFrom(fileToPrint);
+						fileGCode->OriginalMachineState().fileState.MoveFrom(fileToPrint);
 						reprap.GetPrintMonitor()->StartedPrint();
 					}
 				}
@@ -3026,15 +2988,15 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		break;
 
 	case 24: // Print/resume-printing the selected file
-		if (!AllMovesAreFinishedAndMoveBufferIsLoaded())
+		if (!LockMovementAndWaitForStandstill(gb))
 		{
 			return false;
 		}
 
 		if (isPaused)
 		{
-			state = GCodeState::resuming1;
-			DoFileMacro(RESUME_G);
+			gb.MachineState().state = GCodeState::resuming1;
+			DoFileMacro(gb, RESUME_G);
 		}
 		else if (!fileToPrint.IsLive())
 		{
@@ -3043,14 +3005,16 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		}
 		else
 		{
-			fileBeingPrinted.MoveFrom(fileToPrint);
+			fileGCode->OriginalMachineState().fileState.MoveFrom(fileToPrint);
 			reprap.GetPrintMonitor()->StartedPrint();
 		}
 		break;
 
 	case 226: // Gcode Initiated Pause
-		if (!AllMovesAreFinishedAndMoveBufferIsLoaded())
+		if (!LockMovementAndWaitForStandstill(gb))
+		{
 			return false;
+		}
 		// no break
 
 	case 25: // Pause the print
@@ -3064,32 +3028,26 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 			reply.copy("Cannot pause print, because no file is being printed!");
 			error = true;
 		}
-		else if (doingFileMacro && gb != fileMacroGCode)
-		{
-			reply.copy("Cannot pause macro files, wait for it to complete first!");
-			error = true;
-		}
 		else
 		{
-			DoPause(code == 25 && gb != fileGCode);
+			DoPause(code == 25 && &gb != fileGCode);
 		}
 		break;
 
 	case 26: // Set SD position
-		if (gb->Seen('S'))
+		if (gb.Seen('S'))
 		{
-			const FilePosition value = gb->GetIValue();
+			const FilePosition value = gb.GetIValue();
 			if (value < 0)
 			{
 				reply.copy("SD positions can't be negative!");
 				error = true;
 			}
-			else if (fileBeingPrinted.IsLive())
+			else if (fileGCode->OriginalMachineState().fileState.IsLive())
 			{
-				if (fileBeingPrinted.Seek(value))
+				if (fileGCode->OriginalMachineState().fileState.Seek(value))
 				{
-					FileGCodeInput *input = doingFileMacro ? fileMacroInput : fileInput;
-					input->Reset();
+					fileInput->Reset();
 				}
 				else
 				{
@@ -3122,6 +3080,7 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		if (reprap.GetPrintMonitor()->IsPrinting())
 		{
 			// Pronterface keeps sending M27 commands if "Monitor status" is checked, and it specifically expects the following response syntax
+			FileData& fileBeingPrinted = fileGCode->OriginalMachineState().fileState;
 			reply.printf("SD printing byte %lu/%lu", fileBeingPrinted.GetPosition() - fileInput->BytesCached(), fileBeingPrinted.Length());
 		}
 		else
@@ -3132,10 +3091,10 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 
 	case 28: // Write to file
 		{
-			const char* str = gb->GetUnprecedentedString();
+			const char* str = gb.GetUnprecedentedString();
 			if (str != nullptr)
 			{
-				bool ok = OpenFileToWrite(platform->GetGCodeDir(), str, gb);
+				bool ok = OpenFileToWrite(gb, platform->GetGCodeDir(), str);
 				if (ok)
 				{
 					reply.printf("Writing to file: %s", str);
@@ -3155,7 +3114,7 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 
 	case 30:	// Delete file
 		{
-			const char *filename = gb->GetUnprecedentedString();
+			const char *filename = gb.GetUnprecedentedString();
 			if (filename != nullptr)
 			{
 				DeleteFile(filename);
@@ -3166,13 +3125,18 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		// For case 32, see case 24
 
 	case 36:	// Return file information
+		if (!LockFileSystem(gb))									// getting file info takes several calls and isn't reentrant
 		{
-			const char* filename = gb->GetUnprecedentedString(true);	// get filename, or nullptr if none provided
+			return false;
+		}
+		{
+			const char* filename = gb.GetUnprecedentedString(true);	// get filename, or nullptr if none provided
 			OutputBuffer *fileInfoResponse;
 			result = reprap.GetPrintMonitor()->GetFileInfoResponse(filename, fileInfoResponse);
 			if (result)
 			{
 				fileInfoResponse->cat('\n');
+				UnlockAll(gb);
 				HandleReply(gb, false, fileInfoResponse);
 				return true;
 			}
@@ -3180,15 +3144,15 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		break;
 
 	case 37:	// Simulation mode on/off
-		if (gb->Seen('S'))
+		if (gb.Seen('S'))
 		{
-			if (!AllMovesAreFinishedAndMoveBufferIsLoaded())
+			if (!LockMovementAndWaitForStandstill(gb))
 			{
 				return false;
 			}
 
 			bool wasSimulating = (simulationMode != 0);
-			simulationMode = (uint8_t)gb->GetIValue();
+			simulationMode = (uint8_t)gb.GetIValue();
 			reprap.GetMove()->Simulate(simulationMode);
 
 			if (simulationMode != 0)
@@ -3220,10 +3184,14 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		break;
 
 	case 38: // Report SHA1 of file
+		if (!LockFileSystem(gb))								// getting file hash takes several calls and isn't reentrant
+		{
+			return false;
+		}
 		if (fileBeingHashed == nullptr)
 		{
 			// See if we can open the file and start hashing
-			const char* filename = gb->GetUnprecedentedString(true);
+			const char* filename = gb.GetUnprecedentedString(true);
 			if (StartHash(filename))
 			{
 				// Hashing is now in progress...
@@ -3243,16 +3211,16 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		break;
 
 	case 42:	// Turn an output pin on or off
-		if (gb->Seen('P'))
+		if (gb.Seen('P'))
 		{
-			const int logicalPin = gb->GetIValue();
+			const int logicalPin = gb.GetIValue();
 			Pin pin;
 			bool invert;
 			if (platform->GetFirmwarePin(logicalPin, PinAccess::pwm, pin, invert))
 			{
-				if (gb->Seen('S'))
+				if (gb.Seen('S'))
 				{
-					float val = gb->GetFValue();
+					float val = gb.GetFValue();
 					if (val > 1.0)
 					{
 						val /= 255.0;
@@ -3279,30 +3247,32 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		break;
 
 	case 81:	// ATX power off
-		if (!AllMovesAreFinishedAndMoveBufferIsLoaded())
+		if (!LockMovementAndWaitForStandstill(gb))
+		{
 			return false;
+		}
 		platform->SetAtxPower(false);
 		break;
 
 	case 82:	// Use absolute extruder positioning
-		if (drivesRelative)		// don't reset the absolute extruder position if it was already absolute
+		if (gb.MachineState().drivesRelative)		// don't reset the absolute extruder position if it was already absolute
 		{
 			for (size_t extruder = 0; extruder < MaxExtruders; extruder++)
 			{
 				lastRawExtruderPosition[extruder] = 0.0;
 			}
-			drivesRelative = false;
+			gb.MachineState().drivesRelative = false;
 		}
 		break;
 
 	case 83:	// Use relative extruder positioning
-		if (!drivesRelative)	// don't reset the absolute extruder position if it was already relative
+		if (!gb.MachineState().drivesRelative)	// don't reset the absolute extruder position if it was already relative
 		{
 			for (size_t extruder = 0; extruder < MaxExtruders; extruder++)
 			{
 				lastRawExtruderPosition[extruder] = 0.0;
 			}
-			drivesRelative = true;
+			gb.MachineState().drivesRelative = true;
 		}
 		break;
 
@@ -3312,10 +3282,6 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		break;
 
 	case 92: // Set/report steps/mm for some axes
-		if (!AllMovesAreFinishedAndMoveBufferIsLoaded())
-		{
-			return false;
-		}
 		{
 			// Save the current positions as we may need them later
 			float positionNow[DRIVES];
@@ -3325,19 +3291,27 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 			bool seen = false;
 			for (size_t axis = 0; axis < numAxes; axis++)
 			{
-				if (gb->Seen(axisLetters[axis]))
+				if (gb.Seen(axisLetters[axis]))
 				{
-					platform->SetDriveStepsPerUnit(axis, gb->GetFValue());
+					if (!LockMovementAndWaitForStandstill(gb))
+					{
+						return false;
+					}
+					platform->SetDriveStepsPerUnit(axis, gb.GetFValue());
 					seen = true;
 				}
 			}
 
-			if (gb->Seen(extrudeLetter))
+			if (gb.Seen(extrudeLetter))
 			{
+				if (!LockMovementAndWaitForStandstill(gb))
+				{
+					return false;
+				}
 				seen = true;
 				float eVals[MaxExtruders];
 				size_t eCount = numExtruders;
-				gb->GetFloatArray(eVals, eCount, true);
+				gb.GetFloatArray(eVals, eCount, true);
 
 				// The user may not have as many extruders as we allow for, so just set the ones for which a value is provided
 				for (size_t e = 0; e < eCount; e++)
@@ -3370,35 +3344,25 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		break;
 
 	case 98: // Call Macro/Subprogram
-		if (!AllMovesAreFinishedAndMoveBufferIsLoaded())
+		if (gb.Seen('P'))
 		{
-			return false;
-		}
-
-		if (gb->Seen('P'))
-		{
-			DoFileMacro(gb->GetString());
+			DoFileMacro(gb, gb.GetString());
 		}
 		break;
 
 	case 99: // Return from Macro/Subprogram
-		if (!AllMovesAreFinishedAndMoveBufferIsLoaded())
-		{
-			return false;
-		}
-
-		FileMacroCyclesReturn();
+		FileMacroCyclesReturn(gb);
 		break;
 
 	case 104: // Deprecated.  This sets the active temperature of every heater of the active tool
-		if (gb->Seen('S'))
+		if (gb.Seen('S'))
 		{
-			float temperature = gb->GetFValue();
+			float temperature = gb.GetFValue();
 			Tool* tool;
-			if (gb->Seen('T'))
+			if (gb.Seen('T'))
 			{
-				int toolNumber = gb->GetIValue();
-				toolNumber += gb->GetToolNumberAdjust();
+				int toolNumber = gb.GetIValue();
+				toolNumber += gb.GetToolNumberAdjust();
 				tool = reprap.GetTool(toolNumber);
 			}
 			else
@@ -3450,7 +3414,7 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		{
 			bool seenFanNum = false;
 			int32_t fanNum = 0;			// Default to the first fan
-			gb->TryGetIValue('P', fanNum, seenFanNum);
+			gb.TryGetIValue('P', fanNum, seenFanNum);
 			if (fanNum < 0 || fanNum > (int)NUM_FANS)
 			{
 				reply.printf("Fan number %d is invalid, must be between 0 and %u", fanNum, NUM_FANS);
@@ -3460,9 +3424,9 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 				bool seen = false;
 				Fan& fan = platform->GetFan(fanNum);
 
-				if (gb->Seen('I'))		// Invert cooling
+				if (gb.Seen('I'))		// Invert cooling
 				{
-					const int invert = gb->GetIValue();
+					const int invert = gb.GetIValue();
 					if (invert < 0)
 					{
 						fan.Disable();
@@ -3474,36 +3438,36 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 					seen = true;
 				}
 
-				if (gb->Seen('F'))		// Set PWM frequency
+				if (gb.Seen('F'))		// Set PWM frequency
 				{
-					fan.SetPwmFrequency(gb->GetFValue());
+					fan.SetPwmFrequency(gb.GetFValue());
 					seen = true;
 				}
 
-				if (gb->Seen('T'))		// Set thermostatic trigger temperature
+				if (gb.Seen('T'))		// Set thermostatic trigger temperature
 				{
 					seen = true;
-					fan.SetTriggerTemperature(gb->GetFValue());
+					fan.SetTriggerTemperature(gb.GetFValue());
 				}
 
-				if (gb->Seen('B'))		// Set blip time
+				if (gb.Seen('B'))		// Set blip time
 				{
 					seen = true;
-					fan.SetBlipTime(gb->GetFValue());
+					fan.SetBlipTime(gb.GetFValue());
 				}
 
-				if (gb->Seen('L'))		// Set minimum speed
+				if (gb.Seen('L'))		// Set minimum speed
 				{
 					seen = true;
-					fan.SetMinValue(gb->GetFValue());
+					fan.SetMinValue(gb.GetFValue());
 				}
 
-				if (gb->Seen('H'))		// Set thermostatically-controller heaters
+				if (gb.Seen('H'))		// Set thermostatically-controller heaters
 				{
 					seen = true;
 					long heaters[HEATERS];
 					size_t numH = HEATERS;
-					gb->GetLongArray(heaters, numH);
+					gb.GetLongArray(heaters, numH);
 					// Note that M106 H-1 disables thermostatic mode. The following code implements that automatically.
 					uint16_t hh = 0;
 					for (size_t h = 0; h < numH; ++h)
@@ -3521,9 +3485,9 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 					fan.SetHeatersMonitored(hh);
 				}
 
-				if (gb->Seen('S'))		// Set new fan value - process this after processing 'H' or it may not be acted on
+				if (gb.Seen('S'))		// Set new fan value - process this after processing 'H' or it may not be acted on
 				{
-					const float f = constrain<float>(gb->GetFValue(), 0.0, 255.0);
+					const float f = constrain<float>(gb.GetFValue(), 0.0, 255.0);
 					if (seen || seenFanNum)
 					{
 						platform->SetFanValue(fanNum, f);
@@ -3536,9 +3500,9 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 						SetMappedFanSpeed();
 					}
 				}
-				else if (gb->Seen('R'))
+				else if (gb.Seen('R'))
 				{
-					const int i = gb->GetIValue();
+					const int i = gb.GetIValue();
 					switch(i)
 					{
 					case 0:
@@ -3584,23 +3548,26 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		platform->SetFanValue(0, 0.0);		//T3P3 as deprecated only applies to fan0
 		break;
 
-	case 109: // Deprecated in RRF, but widely generated by slicers
-		if (!AllMovesAreFinishedAndMoveBufferIsLoaded())
+	case 108: // Cancel waiting for temperature
+		if (isWaiting)
 		{
-			return false;
+			cancelWait = true;
 		}
+		break;
+
+	case 109: // Deprecated in RRF, but widely generated by slicers
 		{
 			float temperature;
 			bool waitWhenCooling;
-			if (gb->Seen('R'))
+			if (gb.Seen('R'))
 			{
 				waitWhenCooling = true;
-				temperature = gb->GetFValue();
+				temperature = gb.GetFValue();
 			}
-			else if (gb->Seen('S'))
+			else if (gb.Seen('S'))
 			{
 				waitWhenCooling = false;
-				temperature = gb->GetFValue();
+				temperature = gb.GetFValue();
 			}
 			else
 			{
@@ -3608,10 +3575,10 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 			}
 
 			Tool *tool;
-			if (gb->Seen('T'))
+			if (gb.Seen('T'))
 			{
-				int toolNumber = gb->GetIValue();
-				toolNumber += gb->GetToolNumberAdjust();
+				int toolNumber = gb.GetIValue();
+				toolNumber += gb.GetToolNumberAdjust();
 				tool = reprap.GetTool(toolNumber);
 			}
 			else
@@ -3624,7 +3591,14 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 				}
 			}
 			SetToolHeaters(tool, temperature);
-			result = ToolHeatersAtSetTemperatures(tool, waitWhenCooling);
+			if (cancelWait || ToolHeatersAtSetTemperatures(tool, waitWhenCooling))
+			{
+				cancelWait = isWaiting = false;
+				break;
+			}
+			// In Marlin emulation mode we should return some sort of (undocumented) message here every second...
+			isWaiting = true;
+			return false;
 		}
 		break;
 
@@ -3632,12 +3606,12 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		break;
 
 	case 111: // Debug level
-		if (gb->Seen('S'))
+		if (gb.Seen('S'))
 		{
-			bool dbv = (gb->GetIValue() != 0);
-			if (gb->Seen('P'))
+			bool dbv = (gb.GetIValue() != 0);
+			if (gb.Seen('P'))
 			{
-				reprap.SetDebug(static_cast<Module>(gb->GetIValue()), dbv);
+				reprap.SetDebug(static_cast<Module>(gb.GetIValue()), dbv);
 			}
 			else
 			{
@@ -3659,9 +3633,9 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		break;
 
 	case 115: // Print firmware version or set hardware type
-		if (gb->Seen('P'))
+		if (gb.Seen('P'))
 		{
-			platform->SetBoardType((BoardType)gb->GetIValue());
+			platform->SetBoardType((BoardType)gb.GetIValue());
 		}
 		else
 		{
@@ -3677,67 +3651,72 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		}
 		break;
 
-	case 116: // Wait for everything, especially set temperatures
-		if (!AllMovesAreFinishedAndMoveBufferIsLoaded())
-		{
-			return false;
-		}
-
+	case 116: // Wait for set temperatures
 		{
 			bool seen = false;
-			if (gb->Seen('P'))
+			if (gb.Seen('P'))
 			{
 				// Wait for the heaters associated with the specified tool to be ready
-				int toolNumber = gb->GetIValue();
-				toolNumber += gb->GetToolNumberAdjust();
-				if (!ToolHeatersAtSetTemperatures(reprap.GetTool(toolNumber), true))
+				int toolNumber = gb.GetIValue();
+				toolNumber += gb.GetToolNumberAdjust();
+				if (!cancelWait && !ToolHeatersAtSetTemperatures(reprap.GetTool(toolNumber), true))
 				{
+					isWaiting = true;
 					return false;
 				}
 				seen = true;
 			}
 
-			if (gb->Seen('H'))
+			if (gb.Seen('H'))
 			{
 				// Wait for specified heaters to be ready
 				long heaters[HEATERS];
 				size_t heaterCount = HEATERS;
-				gb->GetLongArray(heaters, heaterCount);
-				for(size_t i=0; i<heaterCount; i++)
+				gb.GetLongArray(heaters, heaterCount);
+				if (!cancelWait)
 				{
-					if (!reprap.GetHeat()->HeaterAtSetTemperature(heaters[i], true))
+					for (size_t i=0; i<heaterCount; i++)
 					{
-						return false;
+						if (!reprap.GetHeat()->HeaterAtSetTemperature(heaters[i], true))
+						{
+							isWaiting = true;
+							return false;
+						}
 					}
 				}
 				seen = true;
 			}
 
-			if (gb->Seen('C'))
+			if (gb.Seen('C'))
 			{
 				// Wait for chamber heater to be ready
 				const int8_t chamberHeater = reprap.GetHeat()->GetChamberHeater();
 				if (chamberHeater != -1)
 				{
-					if (!reprap.GetHeat()->HeaterAtSetTemperature(chamberHeater, true))
+					if (!cancelWait && !reprap.GetHeat()->HeaterAtSetTemperature(chamberHeater, true))
 					{
+						isWaiting = true;
 						return false;
 					}
 				}
 				seen = true;
 			}
 
-			if (!seen)
+			// Wait for all heaters to be ready
+			if (!seen && !cancelWait && !reprap.GetHeat()->AllHeatersAtSetTemperatures(true))
 			{
-				// Wait for all heaters to be ready
-				result = reprap.GetHeat()->AllHeatersAtSetTemperatures(true);
+				isWaiting = true;
+				return false;
 			}
+
+			// If we get here, there is nothing more to wait for
+			cancelWait = isWaiting = false;
 		}
 		break;
 
 	case 117:	// Display message
 		{
-			const char *msg = gb->GetUnprecedentedString(true);
+			const char *msg = gb.GetUnprecedentedString(true);
 			reprap.SetMessage((msg == nullptr) ? "" : msg);
 		}
 		break;
@@ -3752,27 +3731,19 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		break;
 
 	case 120:
-		if (!AllMovesAreFinishedAndMoveBufferIsLoaded())
-		{
-			return false;
-		}
-		Push();
+		Push(gb);
 		break;
 
 	case 121:
-		if (!AllMovesAreFinishedAndMoveBufferIsLoaded())
-		{
-			return false;
-		}
-		Pop();
+		Pop(gb);
 		break;
 
 	case 122:
 		{
-			int val = (gb->Seen('P')) ? gb->GetIValue() : 0;
+			int val = (gb.Seen('P')) ? gb.GetIValue() : 0;
 			if (val == 0)
 			{
-				reprap.Diagnostics(gb->GetResponseMessageType());
+				reprap.Diagnostics(gb.GetResponseMessageType());
 			}
 			else
 			{
@@ -3782,9 +3753,9 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		break;
 
 	case 135: // Set PID sample interval
-		if (gb->Seen('S'))
+		if (gb.Seen('S'))
 		{
-			platform->SetHeatSampleTime(gb->GetFValue() * 0.001);  // Value is in milliseconds; we want seconds
+			platform->SetHeatSampleTime(gb.GetFValue() * 0.001);  // Value is in milliseconds; we want seconds
 		}
 		else
 		{
@@ -3795,9 +3766,9 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 	case 140: // Set bed temperature
 		{
 			int8_t bedHeater;
-			if (gb->Seen('H'))
+			if (gb.Seen('H'))
 			{
-				bedHeater = gb->GetIValue();
+				bedHeater = gb.GetIValue();
 				if (bedHeater < 0)
 				{
 					// Make sure we stay within reasonable boundaries...
@@ -3831,9 +3802,9 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 				}
 			}
 
-			if(gb->Seen('S'))
+			if(gb.Seen('S'))
 			{
-				float temperature = gb->GetFValue();
+				float temperature = gb.GetFValue();
 				if (temperature < NEARLY_ABS_ZERO)
 				{
 					reprap.GetHeat()->SwitchOff(bedHeater);
@@ -3844,9 +3815,9 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 					reprap.GetHeat()->Activate(bedHeater);
 				}
 			}
-			if(gb->Seen('R'))
+			if(gb.Seen('R'))
 			{
-				reprap.GetHeat()->SetStandbyTemperature(bedHeater, gb->GetFValue());
+				reprap.GetHeat()->SetStandbyTemperature(bedHeater, gb.GetFValue());
 			}
 		}
 		break;
@@ -3854,11 +3825,11 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 	case 141: // Chamber temperature
 		{
 			bool seen = false;
-			if (gb->Seen('H'))
+			if (gb.Seen('H'))
 			{
 				seen = true;
 
-				int heater = gb->GetIValue();
+				int heater = gb.GetIValue();
 				if (heater < 0)
 				{
 					const int8_t currentHeater = reprap.GetHeat()->GetChamberHeater();
@@ -3880,14 +3851,14 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 				}
 			}
 
-			if (gb->Seen('S'))
+			if (gb.Seen('S'))
 			{
 				seen = true;
 
 				const int8_t currentHeater = reprap.GetHeat()->GetChamberHeater();
 				if (currentHeater != -1)
 				{
-					float temperature = gb->GetFValue();
+					float temperature = gb.GetFValue();
 
 					if (temperature < NEARLY_ABS_ZERO)
 					{
@@ -3922,22 +3893,30 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		break;
 
 	case 143: // Set temperature limit
-		if (gb->Seen('S'))
 		{
-			float limit = gb->GetFValue();
-			if (limit > BAD_LOW_TEMPERATURE && limit < BAD_ERROR_TEMPERATURE)
+			const int heater = (gb.Seen('H')) ? gb.GetIValue() : 1;		// default to extruder 1 if no heater number provided
+			if (heater < 0 || heater >= HEATERS)
 			{
-				platform->SetTemperatureLimit(limit);
+				reply.copy("Invalid heater number");
+				error = true;
+			}
+			else if (gb.Seen('S'))
+			{
+				const float limit = gb.GetFValue();
+				if (limit > BAD_LOW_TEMPERATURE && limit < BAD_ERROR_TEMPERATURE)
+				{
+					reprap.GetHeat()->SetTemperatureLimit(heater, limit);
+				}
+				else
+				{
+					reply.copy("Invalid temperature limit");
+					error = true;
+				}
 			}
 			else
 			{
-				reply.copy("Invalid temperature limit");
-				error = true;
+				reply.printf("Temperature limit for heater %d is %.1fC", heater, reprap.GetHeat()->GetTemperatureLimit(heater));
 			}
-		}
-		else
-		{
-			reply.printf("Temperature limit is %.1fC", platform->GetTemperatureLimit());
 		}
 		break;
 
@@ -3953,26 +3932,21 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 
 	case 190: // Set bed temperature and wait
 	case 191: // Set chamber temperature and wait
-		if (!AllMovesAreFinishedAndMoveBufferIsLoaded())	// tell Move not to wait for more moves
-		{
-			return false;
-		}
-
 		{
 			const int8_t heater = (code == 191) ? reprap.GetHeat()->GetChamberHeater() : reprap.GetHeat()->GetBedHeater();
 			if (heater >= 0)
 			{
 				float temperature;
 				bool waitWhenCooling;
-				if (gb->Seen('R'))
+				if (gb.Seen('R'))
 				{
 					waitWhenCooling = true;
-					temperature = gb->GetFValue();
+					temperature = gb.GetFValue();
 				}
-				else if (gb->Seen('S'))
+				else if (gb.Seen('S'))
 				{
 					waitWhenCooling = false;
-					temperature = gb->GetFValue();
+					temperature = gb.GetFValue();
 				}
 				else
 				{
@@ -3981,7 +3955,14 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 
 				reprap.GetHeat()->SetActiveTemperature(heater, temperature);
 				reprap.GetHeat()->Activate(heater);
-				result = reprap.GetHeat()->HeaterAtSetTemperature(heater, waitWhenCooling);
+				if (cancelWait || reprap.GetHeat()->HeaterAtSetTemperature(heater, waitWhenCooling))
+				{
+					cancelWait = isWaiting = false;
+					break;
+				}
+				// In Marlin emulation mode we should return some sort of (undocumented) message here every second...
+				isWaiting = true;
+				return false;
 			}
 		}
 		break;
@@ -3991,29 +3972,29 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 			bool seen = false;
 			for (size_t axis = 0; axis < numAxes; axis++)
 			{
-				if (gb->Seen(axisLetters[axis]))
+				if (gb.Seen(axisLetters[axis]))
 				{
-					platform->SetAcceleration(axis, gb->GetFValue() * distanceScale);
+					platform->SetAcceleration(axis, gb.GetFValue() * distanceScale);
 					seen = true;
 				}
 			}
 
-			if (gb->Seen(extrudeLetter))
+			if (gb.Seen(extrudeLetter))
 			{
 				seen = true;
 				float eVals[MaxExtruders];
 				size_t eCount = numExtruders;
-				gb->GetFloatArray(eVals, eCount, true);
+				gb.GetFloatArray(eVals, eCount, true);
 				for (size_t e = 0; e < eCount; e++)
 				{
 					platform->SetAcceleration(numAxes + e, eVals[e] * distanceScale);
 				}
 			}
 
-			if (gb->Seen('P'))
+			if (gb.Seen('P'))
 			{
 				// Set max average printing acceleration
-				platform->SetMaxAverageAcceleration(gb->GetFValue() * distanceScale);
+				platform->SetMaxAverageAcceleration(gb.GetFValue() * distanceScale);
 				seen = true;
 			}
 
@@ -4041,19 +4022,19 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 			bool seen = false;
 			for (size_t axis = 0; axis < numAxes; ++axis)
 			{
-				if (gb->Seen(axisLetters[axis]))
+				if (gb.Seen(axisLetters[axis]))
 				{
-					platform->SetMaxFeedrate(axis, gb->GetFValue() * distanceScale * secondsToMinutes); // G Code feedrates are in mm/minute; we need mm/sec
+					platform->SetMaxFeedrate(axis, gb.GetFValue() * distanceScale * secondsToMinutes); // G Code feedrates are in mm/minute; we need mm/sec
 					seen = true;
 				}
 			}
 
-			if (gb->Seen(extrudeLetter))
+			if (gb.Seen(extrudeLetter))
 			{
 				seen = true;
 				float eVals[MaxExtruders];
 				size_t eCount = numExtruders;
-				gb->GetFloatArray(eVals, eCount, true);
+				gb.GetFloatArray(eVals, eCount, true);
 				for (size_t e = 0; e < eCount; e++)
 				{
 					platform->SetMaxFeedrate(numAxes + e, eVals[e] * distanceScale * secondsToMinutes);
@@ -4089,29 +4070,29 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 	case 207: // Set firmware retraction details
 		{
 			bool seen = false;
-			if (gb->Seen('S'))
+			if (gb.Seen('S'))
 			{
-				retractLength = max<float>(gb->GetFValue(), 0.0);
+				retractLength = max<float>(gb.GetFValue(), 0.0);
 				seen = true;
 			}
-			if (gb->Seen('R'))
+			if (gb.Seen('R'))
 			{
-				retractExtra = max<float>(gb->GetFValue(), -retractLength);
+				retractExtra = max<float>(gb.GetFValue(), -retractLength);
 				seen = true;
 			}
-			if (gb->Seen('F'))
+			if (gb.Seen('F'))
 			{
-				unRetractSpeed = retractSpeed = max<float>(gb->GetFValue(), 60.0);
+				unRetractSpeed = retractSpeed = max<float>(gb.GetFValue(), 60.0);
 				seen = true;
 			}
-			if (gb->Seen('T'))	// must do this one after 'F'
+			if (gb.Seen('T'))	// must do this one after 'F'
 			{
-				unRetractSpeed = max<float>(gb->GetFValue(), 60.0);
+				unRetractSpeed = max<float>(gb.GetFValue(), 60.0);
 				seen = true;
 			}
-			if (gb->Seen('Z'))
+			if (gb.Seen('Z'))
 			{
-				retractHop = max<float>(gb->GetFValue(), 0.0);
+				retractHop = max<float>(gb.GetFValue(), 0.0);
 				seen = true;
 			}
 			if (!seen)
@@ -4124,13 +4105,13 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 
 	case 208: // Set/print maximum axis lengths. If there is an S parameter with value 1 then we set the min value, else we set the max value.
 		{
-			bool setMin = (gb->Seen('S') ? (gb->GetIValue() == 1) : false);
+			bool setMin = (gb.Seen('S') ? (gb.GetIValue() == 1) : false);
 			bool seen = false;
 			for (size_t axis = 0; axis < numAxes; axis++)
 			{
-				if (gb->Seen(axisLetters[axis]))
+				if (gb.Seen(axisLetters[axis]))
 				{
-					float value = gb->GetFValue() * distanceScale;
+					float value = gb.GetFValue() * distanceScale;
 					if (setMin)
 					{
 						platform->SetAxisMinimum(axis, value);
@@ -4162,9 +4143,9 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		break;
 
 	case 220:	// Set/report speed factor override percentage
-		if (gb->Seen('S'))
+		if (gb.Seen('S'))
 		{
-			float newSpeedFactor = (gb->GetFValue() / 100.0) * secondsToMinutes;	// include the conversion from mm/minute to mm/second
+			float newSpeedFactor = (gb.GetFValue() / 100.0) * secondsToMinutes;	// include the conversion from mm/minute to mm/second
 			if (newSpeedFactor > 0.0)
 			{
 				feedRate *= newSpeedFactor / speedFactor;
@@ -4190,14 +4171,14 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 	case 221:	// Set/report extrusion factor override percentage
 		{
 			int extruder = 0;
-			if (gb->Seen('D'))	// D parameter (if present) selects the extruder number
+			if (gb.Seen('D'))	// D parameter (if present) selects the extruder number
 			{
-				extruder = gb->GetIValue();
+				extruder = gb.GetIValue();
 			}
 
-			if (gb->Seen('S'))	// S parameter sets the override percentage
+			if (gb.Seen('S'))	// S parameter sets the override percentage
 			{
-				float extrusionFactor = gb->GetFValue() / 100.0;
+				float extrusionFactor = gb.GetFValue() / 100.0;
 				if (extruder >= 0 && (size_t)extruder < numExtruders && extrusionFactor >= 0.0)
 				{
 					if (moveAvailable && !moveBuffer.isFirmwareRetraction)
@@ -4218,23 +4199,23 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		// For case 226, see case 25
 
 	case 280:	// Servos
-		if (gb->Seen('P'))
+		if (gb.Seen('P'))
 		{
-			const int servoIndex = gb->GetIValue();
+			const int servoIndex = gb.GetIValue();
 			Pin servoPin;
 			bool invert;
 			if (platform->GetFirmwarePin(servoIndex, PinAccess::servo, servoPin, invert))
 			{
-				if (gb->Seen('I'))
+				if (gb.Seen('I'))
 				{
-					if (gb->GetIValue() > 0)
+					if (gb.GetIValue() > 0)
 					{
 						invert = !invert;
 					}
 				}
-				if (gb->Seen('S'))
+				if (gb.Seen('S'))
 				{
-					float angleOrWidth = gb->GetFValue();
+					float angleOrWidth = gb.GetFValue();
 					if (angleOrWidth < 0.0)
 					{
 						// Disable the servo by setting the pulse width to zero
@@ -4270,8 +4251,8 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 
 	case 300:	// Beep
 		{
-			int ms = (gb->Seen('P')) ? gb->GetIValue() : 1000;			// time in milliseconds
-			int freq = (gb->Seen('S')) ? gb->GetIValue() : 4600;		// 4600Hz produces the loudest sound on a PanelDue
+			int ms = (gb.Seen('P')) ? gb.GetIValue() : 1000;			// time in milliseconds
+			int freq = (gb.Seen('S')) ? gb.GetIValue() : 4600;		// 4600Hz produces the loudest sound on a PanelDue
 			reprap.Beep(freq, ms);
 		}
 		break;
@@ -4281,9 +4262,9 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		break;
 
 	case 302: // Allow, deny or report cold extrudes
-		if (gb->Seen('P'))
+		if (gb.Seen('P'))
 		{
-			if (gb->GetIValue() > 0)
+			if (gb.GetIValue() > 0)
 			{
 				reprap.GetHeat()->AllowColdExtrude();
 			}
@@ -4300,12 +4281,12 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		break;
 
 	case 303: // Run PID tuning
-		if (gb->Seen('H'))
+		if (gb.Seen('H'))
 		{
-			const size_t heater = gb->GetIValue();
-			const float temperature = (gb->Seen('S')) ? gb->GetFValue() : 225.0;
-			const float maxPwm = (gb->Seen('P')) ? gb->GetFValue() : 0.5;
-			if (heater < HEATERS && maxPwm >= 0.1 && maxPwm <= 1.0 && temperature >= 55.0 && temperature <= platform->GetTemperatureLimit())
+			const size_t heater = gb.GetIValue();
+			const float temperature = (gb.Seen('S')) ? gb.GetFValue() : 225.0;
+			const float maxPwm = (gb.Seen('P')) ? gb.GetFValue() : 0.5;
+			if (heater < HEATERS && maxPwm >= 0.1 && maxPwm <= 1.0 && temperature >= 55.0 && temperature <= reprap.GetHeat()->GetTemperatureLimit(heater))
 			{
 				reprap.GetHeat()->StartAutoTune(heater, temperature, maxPwm, reply);
 			}
@@ -4335,9 +4316,9 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		break;
 
 	case 307: // Set heater process model parameters
-		if (gb->Seen('H'))
+		if (gb.Seen('H'))
 		{
-			size_t heater = gb->GetIValue();
+			size_t heater = gb.GetIValue();
 			if (heater < HEATERS)
 			{
 				const FopDt& model = reprap.GetHeat()->GetHeaterModel(heater);
@@ -4345,11 +4326,11 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 				float gain = model.GetGain(), tc = model.GetTimeConstant(), td = model.GetDeadTime(), maxPwm = model.GetMaxPwm();
 				int32_t dontUsePid = model.UsePid() ? 0 : 1;
 
-				gb->TryGetFValue('A', gain, seen);
-				gb->TryGetFValue('C', tc, seen);
-				gb->TryGetFValue('D', td, seen);
-				gb->TryGetIValue('B', dontUsePid, seen);
-				gb->TryGetFValue('S', maxPwm, seen);
+				gb.TryGetFValue('A', gain, seen);
+				gb.TryGetFValue('C', tc, seen);
+				gb.TryGetFValue('D', td, seen);
+				gb.TryGetIValue('B', dontUsePid, seen);
+				gb.TryGetFValue('S', maxPwm, seen);
 
 				if (seen)
 				{
@@ -4390,25 +4371,25 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		break;
 
 	case 350: // Set/report microstepping
-		if (!AllMovesAreFinishedAndMoveBufferIsLoaded())
-		{
-			return false;
-		}
 		{
 			// interp is current an int not a bool, because we use special values of interp to set the chopper control register
 			int interp = 0;
-			if (gb->Seen('I'))
+			if (gb.Seen('I'))
 			{
-				interp = gb->GetIValue();
+				interp = gb.GetIValue();
 			}
 
 			bool seen = false;
 			for (size_t axis = 0; axis < numAxes; axis++)
 			{
-				if (gb->Seen(axisLetters[axis]))
+				if (gb.Seen(axisLetters[axis]))
 				{
+					if (!LockMovementAndWaitForStandstill(gb))
+					{
+						return false;
+					}
 					seen = true;
-					int microsteps = gb->GetIValue();
+					int microsteps = gb.GetIValue();
 					if (ChangeMicrostepping(axis, microsteps, interp))
 					{
 						SetAxisNotHomed(axis);
@@ -4421,12 +4402,16 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 				}
 			}
 
-			if (gb->Seen(extrudeLetter))
+			if (gb.Seen(extrudeLetter))
 			{
+				if (!LockMovementAndWaitForStandstill(gb))
+				{
+					return false;
+				}
 				seen = true;
 				long eVals[MaxExtruders];
 				size_t eCount = numExtruders;
-				gb->GetLongArray(eVals, eCount);
+				gb.GetLongArray(eVals, eCount);
 				for (size_t e = 0; e < eCount; e++)
 				{
 					if (!ChangeMicrostepping(numAxes + e, (int)eVals[e], interp))
@@ -4458,7 +4443,7 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		break;
 
 	case 400: // Wait for current moves to finish
-		if (!AllMovesAreFinishedAndMoveBufferIsLoaded())
+		if (!LockMovementAndWaitForStandstill(gb))
 		{
 			return false;
 		}
@@ -4468,14 +4453,14 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		{
 			bool seen = false;
 
-			if (gb->Seen('N'))
+			if (gb.Seen('N'))
 			{
-				platform->SetFilamentWidth(gb->GetFValue());
+				platform->SetFilamentWidth(gb.GetFValue());
 				seen = true;
 			}
-			if (gb->Seen('D'))
+			if (gb.Seen('D'))
 			{
-				platform->SetNozzleDiameter(gb->GetFValue());
+				platform->SetNozzleDiameter(gb.GetFValue());
 				seen = true;
 			}
 
@@ -4488,8 +4473,8 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 
 	case 408: // Get status in JSON format
 		{
-			int type = gb->Seen('S') ? gb->GetIValue() : 0;
-			int seq = gb->Seen('R') ? gb->GetIValue() : -1;
+			int type = gb.Seen('S') ? gb.GetIValue() : 0;
+			int seq = gb.Seen('R') ? gb.GetIValue() : -1;
 
 			OutputBuffer *statusResponse = nullptr;
 			switch (type)
@@ -4502,7 +4487,7 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 				case 2:
 				case 3:
 				case 4:
-					statusResponse = reprap.GetStatusResponse(type - 1, (gb == auxGCode) ? ResponseSource::AUX : ResponseSource::Generic);
+					statusResponse = reprap.GetStatusResponse(type - 1, (&gb == auxGCode) ? ResponseSource::AUX : ResponseSource::Generic);
 					break;
 
 				case 5:
@@ -4512,6 +4497,7 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 
 			if (statusResponse != nullptr)
 			{
+				UnlockAll(gb);
 				statusResponse->cat('\n');
 				HandleReply(gb, false, statusResponse);
 				return true;
@@ -4525,9 +4511,9 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 
 	case 501: // Load parameters from EEPROM
 		reprap.GetPlatform()->ReadNvData();
-		if (gb->Seen('S'))
+		if (gb.Seen('S'))
 		{
-			reprap.GetPlatform()->SetAutoSave(gb->GetIValue() > 0);
+			reprap.GetPlatform()->SetAutoSave(gb.GetIValue() > 0);
 		}
 		break;
 
@@ -4537,6 +4523,11 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 
 	case 503: // List variable settings
 		{
+			if (!LockFileSystem(gb))
+			{
+				return false;
+			}
+
 			// Need a valid output buffer to continue...
 			OutputBuffer *configResponse;
 			if (!OutputBuffer::Allocate(configResponse))
@@ -4574,6 +4565,7 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 				}
 				f->Close();
 
+				UnlockAll(gb);
 				HandleReply(gb, false, configResponse);
 				return true;
 			}
@@ -4581,7 +4573,7 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		break;
 
 	case 540: // Set/report MAC address
-		if (gb->Seen('P'))
+		if (gb.Seen('P'))
 		{
 			SetMACAddress(gb);
 		}
@@ -4593,9 +4585,9 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		break;
 
 	case 550: // Set/report machine name
-		if (gb->Seen('P'))
+		if (gb.Seen('P'))
 		{
-			reprap.SetName(gb->GetString());
+			reprap.SetName(gb.GetString());
 		}
 		else
 		{
@@ -4604,32 +4596,32 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		break;
 
 	case 551: // Set password (no option to report it)
-		if (gb->Seen('P'))
+		if (gb.Seen('P'))
 		{
-			reprap.SetPassword(gb->GetString());
+			reprap.SetPassword(gb.GetString());
 		}
 		break;
 
 	case 552: // Enable/Disable network and/or Set/Get IP address
 		{
 			bool seen = false;
-			if (gb->Seen('P'))
+			if (gb.Seen('P'))
 			{
 				seen = true;
 				SetEthernetAddress(gb, code);
 			}
 
-			if (gb->Seen('R'))
+			if (gb.Seen('R'))
 			{
-				reprap.GetNetwork()->SetHttpPort(gb->GetIValue());
+				reprap.GetNetwork()->SetHttpPort(gb.GetIValue());
 				seen = true;
 			}
 
 			// Process this one last in case the IP address is changed and the network enabled in the same command
-			if (gb->Seen('S')) // Has the user turned the network on or off?
+			if (gb.Seen('S')) // Has the user turned the network on or off?
 			{
 				seen = true;
-				if (gb->GetIValue() != 0)
+				if (gb.GetIValue() != 0)
 				{
 					reprap.GetNetwork()->Enable();
 				}
@@ -4652,7 +4644,7 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		break;
 
 	case 553: // Set/Get netmask
-		if (gb->Seen('P'))
+		if (gb.Seen('P'))
 		{
 			SetEthernetAddress(gb, code);
 		}
@@ -4664,7 +4656,7 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		break;
 
 	case 554: // Set/Get gateway
-		if (gb->Seen('P'))
+		if (gb.Seen('P'))
 		{
 			SetEthernetAddress(gb, code);
 		}
@@ -4676,9 +4668,9 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		break;
 
 	case 555: // Set/report firmware type to emulate
-		if (gb->Seen('P'))
+		if (gb.Seen('P'))
 		{
-			platform->SetEmulating((Compatibility) gb->GetIValue());
+			platform->SetEmulating((Compatibility) gb.GetIValue());
 		}
 		else
 		{
@@ -4713,14 +4705,14 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		break;
 
 	case 556: // Axis compensation (we support only X, Y, Z)
-		if (gb->Seen('S'))
+		if (gb.Seen('S'))
 		{
-			float value = gb->GetFValue();
+			float value = gb.GetFValue();
 			for (size_t axis = 0; axis <= Z_AXIS; axis++)
 			{
-				if (gb->Seen(axisLetters[axis]))
+				if (gb.Seen(axisLetters[axis]))
 				{
-					reprap.GetMove()->SetAxisCompensation(axis, gb->GetFValue() / value);
+					reprap.GetMove()->SetAxisCompensation(axis, gb.GetFValue() / value);
 				}
 			}
 		}
@@ -4733,9 +4725,9 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		break;
 
 	case 557: // Set/report Z probe point coordinates
-		if (gb->Seen('P'))
+		if (gb.Seen('P'))
 		{
-			int point = gb->GetIValue();
+			int point = gb.GetIValue();
 			if (point < 0 || (unsigned int)point >= MAX_PROBE_POINTS)
 			{
 				reprap.GetPlatform()->Message(GENERIC_MESSAGE, "Z probe point index out of range.\n");
@@ -4743,14 +4735,14 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 			else
 			{
 				bool seen = false;
-				if (gb->Seen(axisLetters[X_AXIS]))
+				if (gb.Seen(axisLetters[X_AXIS]))
 				{
-					reprap.GetMove()->SetXBedProbePoint(point, gb->GetFValue());
+					reprap.GetMove()->SetXBedProbePoint(point, gb.GetFValue());
 					seen = true;
 				}
-				if (gb->Seen(axisLetters[Y_AXIS]))
+				if (gb.Seen(axisLetters[Y_AXIS]))
 				{
-					reprap.GetMove()->SetYBedProbePoint(point, gb->GetFValue());
+					reprap.GetMove()->SetYBedProbePoint(point, gb.GetFValue());
 					seen = true;
 				}
 
@@ -4768,9 +4760,9 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 			uint32_t zProbeAxes = platform->GetZProbeAxes();
 			for (size_t axis = 0; axis < numAxes; axis++)
 			{
-				if (gb->Seen(axisLetters[axis]))
+				if (gb.Seen(axisLetters[axis]))
 				{
-					if (gb->GetIValue() > 0)
+					if (gb.GetIValue() > 0)
 					{
 						zProbeAxes |= (1u << axis);
 					}
@@ -4787,35 +4779,35 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 			}
 
 			// We must get and set the Z probe type first before setting the dive height etc., because different probe types may have different parameters
-			if (gb->Seen('P'))		// probe type
+			if (gb.Seen('P'))		// probe type
 			{
-				platform->SetZProbeType(gb->GetIValue());
+				platform->SetZProbeType(gb.GetIValue());
 				seenType = true;
 			}
 
 			ZProbeParameters params = platform->GetZProbeParameters();
-			gb->TryGetFValue('H', params.diveHeight, seenParam);		// dive height
+			gb.TryGetFValue('H', params.diveHeight, seenParam);		// dive height
 
-			if (gb->Seen('F'))		// feed rate i.e. probing speed
+			if (gb.Seen('F'))		// feed rate i.e. probing speed
 			{
-				params.probeSpeed = gb->GetFValue() * secondsToMinutes;
+				params.probeSpeed = gb.GetFValue() * secondsToMinutes;
 				seenParam = true;
 			}
 
-			if (gb->Seen('T'))		// travel speed to probe point
+			if (gb.Seen('T'))		// travel speed to probe point
 			{
-				params.travelSpeed = gb->GetFValue() * secondsToMinutes;
+				params.travelSpeed = gb.GetFValue() * secondsToMinutes;
 				seenParam = true;
 			}
 
-			if (gb->Seen('I'))
+			if (gb.Seen('I'))
 			{
-				params.invertReading = (gb->GetIValue() != 0);
+				params.invertReading = (gb.GetIValue() != 0);
 				seenParam = true;
 			}
 
-			gb->TryGetFValue('S', params.param1, seenParam);	// extra parameter for experimentation
-			gb->TryGetFValue('R', params.param2, seenParam);	// extra parameter for experimentation
+			gb.TryGetFValue('S', params.param1, seenParam);	// extra parameter for experimentation
+			gb.TryGetFValue('R', params.param2, seenParam);	// extra parameter for experimentation
 
 			if (seenParam)
 			{
@@ -4845,8 +4837,8 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 
 	case 559: // Upload config.g or another gcode file to put in the sys directory
 	{
-		const char* str = (gb->Seen('P') ? gb->GetString() : platform->GetConfigFile());
-		bool ok = OpenFileToWrite(platform->GetSysDir(), str, gb);
+		const char* str = (gb.Seen('P') ? gb.GetString() : platform->GetConfigFile());
+		bool ok = OpenFileToWrite(gb, platform->GetSysDir(), str);
 		if (ok)
 		{
 			reply.printf("Writing to file: %s", str);
@@ -4861,8 +4853,8 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 
 	case 560: // Upload reprap.htm or another web interface file
 	{
-		const char* str = (gb->Seen('P') ? gb->GetString() : INDEX_PAGE_FILE);
-		bool ok = OpenFileToWrite(platform->GetWebDir(), str, gb);
+		const char* str = (gb.Seen('P') ? gb.GetString() : INDEX_PAGE_FILE);
+		bool ok = OpenFileToWrite(gb, platform->GetWebDir(), str);
 		if (ok)
 		{
 			reply.printf("Writing to file: %s", str);
@@ -4880,9 +4872,9 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		break;
 
 	case 562: // Reset temperature fault - use with great caution
-		if (gb->Seen('P'))
+		if (gb.Seen('P'))
 		{
-			int heater = gb->GetIValue();
+			int heater = gb.GetIValue();
 			if (heater >= 0 && heater < HEATERS)
 			{
 				reprap.ClearTemperatureFault(heater);
@@ -4900,9 +4892,9 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		break;
 
 	case 564: // Think outside the box?
-		if (gb->Seen('S'))
+		if (gb.Seen('S'))
 		{
-			limitAxes = (gb->GetIValue() != 0);
+			limitAxes = (gb.GetIValue() != 0);
 		}
 		else
 		{
@@ -4915,19 +4907,19 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		bool seen = false;
 		for (size_t axis = 0; axis < numAxes; axis++)
 		{
-			if (gb->Seen(axisLetters[axis]))
+			if (gb.Seen(axisLetters[axis]))
 			{
-				platform->SetInstantDv(axis, gb->GetFValue() * distanceScale * secondsToMinutes); // G Code feedrates are in mm/minute; we need mm/sec
+				platform->SetInstantDv(axis, gb.GetFValue() * distanceScale * secondsToMinutes); // G Code feedrates are in mm/minute; we need mm/sec
 				seen = true;
 			}
 		}
 
-		if (gb->Seen(extrudeLetter))
+		if (gb.Seen(extrudeLetter))
 		{
 			seen = true;
 			float eVals[MaxExtruders];
 			size_t eCount = numExtruders;
-			gb->GetFloatArray(eVals, eCount, true);
+			gb.GetFloatArray(eVals, eCount, true);
 			for (size_t e = 0; e < eCount; e++)
 			{
 				platform->SetInstantDv(numAxes + e, eVals[e] * distanceScale * secondsToMinutes);
@@ -4952,20 +4944,20 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		break;
 
 	case 567: // Set/report tool mix ratios
-		if (gb->Seen('P'))
+		if (gb.Seen('P'))
 		{
-			int8_t tNumber = gb->GetIValue();
+			int8_t tNumber = gb.GetIValue();
 			Tool* tool = reprap.GetTool(tNumber);
 			if (tool != NULL)
 			{
-				if (gb->Seen(extrudeLetter))
+				if (gb.Seen(extrudeLetter))
 				{
 					float eVals[MaxExtruders];
 					size_t eCount = tool->DriveCount();
-					gb->GetFloatArray(eVals, eCount, false);
+					gb.GetFloatArray(eVals, eCount, false);
 					if (eCount != tool->DriveCount())
 					{
-						reply.printf("Setting mix ratios - wrong number of E drives: %s", gb->Buffer());
+						reply.printf("Setting mix ratios - wrong number of E drives: %s", gb.Buffer());
 					}
 					else
 					{
@@ -4987,14 +4979,14 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		break;
 
 	case 568: // Turn on/off automatic tool mixing
-		if (gb->Seen('P'))
+		if (gb.Seen('P'))
 		{
-			Tool* tool = reprap.GetTool(gb->GetIValue());
+			Tool* tool = reprap.GetTool(gb.GetIValue());
 			if (tool != NULL)
 			{
-				if (gb->Seen('S'))
+				if (gb.Seen('S'))
 				{
-					tool->SetMixing(gb->GetIValue() != 0);
+					tool->SetMixing(gb.GetIValue() != 0);
 				}
 				else
 				{
@@ -5005,36 +4997,44 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		break;
 
 	case 569: // Set/report axis direction
-		if (gb->Seen('P'))
+		if (gb.Seen('P'))
 		{
-			size_t drive = gb->GetIValue();
+			size_t drive = gb.GetIValue();
 			if (drive < DRIVES)
 			{
 				bool seen = false;
-				if (gb->Seen('S'))
+				if (gb.Seen('S'))
 				{
-					platform->SetDirectionValue(drive, gb->GetIValue() != 0);
+					if (!LockMovementAndWaitForStandstill(gb))
+					{
+						return false;
+					}
+					platform->SetDirectionValue(drive, gb.GetIValue() != 0);
 					seen = true;
 				}
-				if (gb->Seen('R'))
+				if (gb.Seen('R'))
 				{
-					platform->SetEnableValue(drive, gb->GetIValue() != 0);
+					if (!LockMovementAndWaitForStandstill(gb))
+					{
+						return false;
+					}
+					platform->SetEnableValue(drive, gb.GetIValue() != 0);
 					seen = true;
 				}
-				if (gb->Seen('T'))
+				if (gb.Seen('T'))
 				{
-					platform->SetDriverStepTiming(drive, gb->GetFValue());
+					platform->SetDriverStepTiming(drive, gb.GetFValue());
 					seen = true;
 				}
 				bool badParameter = false;
 				for (size_t axis = 0; axis < numAxes; ++axis)
 				{
-					if (gb->Seen(axisLetters[axis]))
+					if (gb.Seen(axisLetters[axis]))
 					{
 						badParameter = true;
 					}
 				}
-				if (gb->Seen(extrudeLetter))
+				if (gb.Seen(extrudeLetter))
 				{
 					badParameter = true;
 				}
@@ -5054,16 +5054,16 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		break;
 
 	case 570: // Set/report heater timeout
-		if (gb->Seen('H'))
+		if (gb.Seen('H'))
 		{
-			const size_t heater = gb->GetIValue();
+			const size_t heater = gb.GetIValue();
 			bool seen = false;
 			if (heater < HEATERS)
 			{
 				float maxTempExcursion, maxFaultTime;
 				reprap.GetHeat()->GetHeaterProtection(heater, maxTempExcursion, maxFaultTime);
-				gb->TryGetFValue('P', maxFaultTime, seen);
-				gb->TryGetFValue('T', maxTempExcursion, seen);
+				gb.TryGetFValue('P', maxFaultTime, seen);
+				gb.TryGetFValue('T', maxTempExcursion, seen);
 				if (seen)
 				{
 					reprap.GetHeat()->SetHeaterProtection(heater, maxTempExcursion, maxFaultTime);
@@ -5074,16 +5074,16 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 				}
 			}
 		}
-		else if (gb->Seen('S'))
+		else if (gb.Seen('S'))
 		{
 			reply.copy("M570 S parameter is no longer required or supported");
 		}
 		break;
 
 	case 571: // Set output on extrude
-		if (gb->Seen('S'))
+		if (gb.Seen('S'))
 		{
-			platform->SetExtrusionAncilliaryPWM(gb->GetFValue());
+			platform->SetExtrusionAncilliaryPWM(gb.GetFValue());
 		}
 		else
 		{
@@ -5092,13 +5092,13 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		break;
 
 	case 572: // Set/report elastic compensation
-		if (gb->Seen('D'))
+		if (gb.Seen('D'))
 		{
 			// New usage: specify the extruder drive using the D parameter
-			size_t extruder = gb->GetIValue();
-			if (gb->Seen('S'))
+			size_t extruder = gb.GetIValue();
+			if (gb.Seen('S'))
 			{
-				platform->SetPressureAdvance(extruder, gb->GetFValue());
+				platform->SetPressureAdvance(extruder, gb.GetFValue());
 			}
 			else
 			{
@@ -5108,9 +5108,9 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		break;
 
 	case 573: // Report heater average PWM
-		if (gb->Seen('P'))
+		if (gb.Seen('P'))
 		{
-			int heater = gb->GetIValue();
+			int heater = gb.GetIValue();
 			if (heater >= 0 && heater < HEATERS)
 			{
 				reply.printf("Average heater %d PWM: %.3f", heater, reprap.GetHeat()->GetAveragePWM(heater));
@@ -5121,12 +5121,12 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 	case 574: // Set endstop configuration
 		{
 			bool seen = false;
-			bool logicLevel = (gb->Seen('S')) ? (gb->GetIValue() != 0) : true;
+			bool logicLevel = (gb.Seen('S')) ? (gb.GetIValue() != 0) : true;
 			for (size_t axis = 0; axis < numAxes; ++axis)
 			{
-				if (gb->Seen(axisLetters[axis]))
+				if (gb.Seen(axisLetters[axis]))
 				{
-					int ival = gb->GetIValue();
+					int ival = gb.GetIValue();
 					if (ival >= 0 && ival <= 3)
 					{
 						platform->SetEndStopConfiguration(axis, (EndStopType) ival, logicLevel);
@@ -5151,20 +5151,20 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		break;
 
 	case 575: // Set communications parameters
-		if (gb->Seen('P'))
+		if (gb.Seen('P'))
 		{
-			size_t chan = gb->GetIValue();
+			size_t chan = gb.GetIValue();
 			if (chan < NUM_SERIAL_CHANNELS)
 			{
 				bool seen = false;
-				if (gb->Seen('B'))
+				if (gb.Seen('B'))
 				{
-					platform->SetBaudRate(chan, gb->GetIValue());
+					platform->SetBaudRate(chan, gb.GetIValue());
 					seen = true;
 				}
-				if (gb->Seen('S'))
+				if (gb.Seen('S'))
 				{
-					uint32_t val = gb->GetIValue();
+					uint32_t val = gb.GetIValue();
 					platform->SetCommsProperties(chan, val);
 					switch (chan)
 					{
@@ -5190,11 +5190,11 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		break;
 
 	case 577: // Wait until endstop is triggered
-		if (gb->Seen('S'))
+		if (gb.Seen('S'))
 		{
 			// Determine trigger type
 			EndStopHit triggerCondition;
-			switch (gb->GetIValue())
+			switch (gb.GetIValue())
 			{
 				case 1:
 					triggerCondition = EndStopHit::lowHit;
@@ -5213,7 +5213,7 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 			// Axis endstops
 			for (size_t axis=0; axis < numAxes; axis++)
 			{
-				if (gb->Seen(axisLetters[axis]))
+				if (gb.Seen(axisLetters[axis]))
 				{
 					if (platform->Stopped(axis) != triggerCondition)
 					{
@@ -5226,9 +5226,9 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 			// Extruder drives
 			size_t eDriveCount = MaxExtruders;
 			long eDrives[MaxExtruders];
-			if (gb->Seen(extrudeLetter))
+			if (gb.Seen(extrudeLetter))
 			{
-				gb->GetLongArray(eDrives, eDriveCount);
+				gb.GetLongArray(eDrives, eDriveCount);
 				for(size_t extruder = 0; extruder < eDriveCount; extruder++)
 				{
 					const size_t eDrive = eDrives[extruder];
@@ -5256,9 +5256,9 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 			return false;
 		}
 
-		if (gb->Seen('S')) // Need to handle the 'P' parameter too; see http://reprap.org/wiki/G-code#M578:_Fire_inkjet_bits
+		if (gb.Seen('S')) // Need to handle the 'P' parameter too; see http://reprap.org/wiki/G-code#M578:_Fire_inkjet_bits
 		{
-			platform->Inkjet(gb->GetIValue());
+			platform->Inkjet(gb.GetIValue());
 		}
 		break;
 #endif
@@ -5268,7 +5268,7 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 			bool seen = false;
 			for (size_t axis = 0; axis < numAxes; axis++)
 			{
-				gb->TryGetFValue(axisLetters[axis], axisScaleFactors[axis], seen);
+				gb.TryGetFValue(axisLetters[axis], axisScaleFactors[axis], seen);
 			}
 
 			if (!seen)
@@ -5286,14 +5286,14 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 
 #if SUPPORT_ROLAND
 	case 580: // (De)Select Roland mill
-		if (gb->Seen('R'))
+		if (gb.Seen('R'))
 		{
-			if (gb->GetIValue())
+			if (gb.GetIValue())
 			{
 				reprap.GetRoland()->Activate();
-				if (gb->Seen('P'))
+				if (gb.Seen('P'))
 				{
-					result = reprap.GetRoland()->RawWrite(gb->GetString());
+					result = reprap.GetRoland()->RawWrite(gb.GetString());
 				}
 			}
 			else
@@ -5310,9 +5310,9 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 
 	case 581: // Configure external trigger
 	case 582: // Check external trigger
-		if (gb->Seen('T'))
+		if (gb.Seen('T'))
 		{
-			unsigned int triggerNumber = gb->GetIValue();
+			unsigned int triggerNumber = gb.GetIValue();
 			if (triggerNumber < MaxTriggers)
 			{
 				if (code == 582)
@@ -5326,32 +5326,32 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 				else
 				{
 					bool seen = false;
-					if (gb->Seen('C'))
+					if (gb.Seen('C'))
 					{
 						seen = true;
-						triggers[triggerNumber].condition = gb->GetIValue();
+						triggers[triggerNumber].condition = gb.GetIValue();
 					}
 					else if (triggers[triggerNumber].IsUnused())
 					{
 						triggers[triggerNumber].condition = 0;		// this is a new trigger, so set no condition
 					}
-					if (gb->Seen('S'))
+					if (gb.Seen('S'))
 					{
 						seen = true;
-						int sval = gb->GetIValue();
+						int sval = gb.GetIValue();
 						TriggerMask triggerMask = 0;
 						for (size_t axis = 0; axis < numAxes; ++axis)
 						{
-							if (gb->Seen(axisLetters[axis]))
+							if (gb.Seen(axisLetters[axis]))
 							{
 								triggerMask |= (1u << axis);
 							}
 						}
-						if (gb->Seen(extrudeLetter))
+						if (gb.Seen(extrudeLetter))
 						{
 							long eStops[MaxExtruders];
 							size_t numEntries = MaxExtruders;
-							gb->GetLongArray(eStops, numEntries);
+							gb.GetLongArray(eStops, numEntries);
 							for (size_t i = 0; i < numEntries; ++i)
 							{
 								if (eStops[i] >= 0 && (unsigned long)eStops[i] < MaxExtruders)
@@ -5408,7 +5408,7 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		break;
 
 	case 584: // Set axis/extruder to stepper driver(s) mapping
-		if (!AllMovesAreFinishedAndMoveBufferIsLoaded())	// we also rely on this to retrieve the current motor positions to moveBuffer
+		if (!LockMovementAndWaitForStandstill(gb))	// we also rely on this to retrieve the current motor positions to moveBuffer
 		{
 			return false;
 		}
@@ -5416,12 +5416,12 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 			bool seen = false, badDrive = false;
 			for (size_t drive = 0; drive < MAX_AXES; ++drive)
 			{
-				if (gb->Seen(axisLetters[drive]))
+				if (gb.Seen(axisLetters[drive]))
 				{
 					seen = true;
 					size_t numValues = MaxDriversPerAxis;
 					long drivers[MaxDriversPerAxis];
-					gb->GetLongArray(drivers, numValues);
+					gb.GetLongArray(drivers, numValues);
 
 					// Check all the driver numbers are in range
 					bool badAxis = false;
@@ -5459,12 +5459,12 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 				}
 			}
 
-			if (gb->Seen(extrudeLetter))
+			if (gb.Seen(extrudeLetter))
 			{
 				seen = true;
 				size_t numValues = DRIVES - numAxes;
 				long drivers[MaxExtruders];
-				gb->GetLongArray(drivers, numValues);
+				gb.GetLongArray(drivers, numValues);
 				numExtruders = numValues;
 				for (size_t i = 0; i < numValues; ++i)
 				{
@@ -5509,7 +5509,7 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		break;
 
 	case 665: // Set delta configuration
-		if (!AllMovesAreFinishedAndMoveBufferIsLoaded())
+		if (!LockMovementAndWaitForStandstill(gb))
 		{
 			return false;
 		}
@@ -5521,44 +5521,44 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 			bool wasInDeltaMode = params.IsDeltaMode();						// remember whether we were in delta mode
 			bool seen = false;
 
-			if (gb->Seen('L'))
+			if (gb.Seen('L'))
 			{
-				params.SetDiagonal(gb->GetFValue() * distanceScale);
+				params.SetDiagonal(gb.GetFValue() * distanceScale);
 				seen = true;
 			}
-			if (gb->Seen('R'))
+			if (gb.Seen('R'))
 			{
-				params.SetRadius(gb->GetFValue() * distanceScale);
+				params.SetRadius(gb.GetFValue() * distanceScale);
 				seen = true;
 			}
-			if (gb->Seen('B'))
+			if (gb.Seen('B'))
 			{
-				params.SetPrintRadius(gb->GetFValue() * distanceScale);
+				params.SetPrintRadius(gb.GetFValue() * distanceScale);
 				seen = true;
 			}
-			if (gb->Seen('X'))
+			if (gb.Seen('X'))
 			{
 				// X tower position correction
-				params.SetXCorrection(gb->GetFValue());
+				params.SetXCorrection(gb.GetFValue());
 				seen = true;
 			}
-			if (gb->Seen('Y'))
+			if (gb.Seen('Y'))
 			{
 				// Y tower position correction
-				params.SetYCorrection(gb->GetFValue());
+				params.SetYCorrection(gb.GetFValue());
 				seen = true;
 			}
-			if (gb->Seen('Z'))
+			if (gb.Seen('Z'))
 			{
 				// Y tower position correction
-				params.SetZCorrection(gb->GetFValue());
+				params.SetZCorrection(gb.GetFValue());
 				seen = true;
 			}
 
 			// The homed height must be done last, because it gets recalculated when some of the other factors are changed
-			if (gb->Seen('H'))
+			if (gb.Seen('H'))
 			{
-				params.SetHomedHeight(gb->GetFValue() * distanceScale);
+				params.SetHomedHeight(gb.GetFValue() * distanceScale);
 				seen = true;
 			}
 
@@ -5593,36 +5593,36 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		break;
 
 	case 666: // Set delta endstop adjustments
-		if (!AllMovesAreFinishedAndMoveBufferIsLoaded())
+		if (!LockMovementAndWaitForStandstill(gb))
 		{
 			return false;
 		}
 		{
 			DeltaParameters& params = reprap.GetMove()->AccessDeltaParams();
 			bool seen = false;
-			if (gb->Seen('X'))
+			if (gb.Seen('X'))
 			{
-				params.SetEndstopAdjustment(X_AXIS, gb->GetFValue());
+				params.SetEndstopAdjustment(X_AXIS, gb.GetFValue());
 				seen = true;
 			}
-			if (gb->Seen('Y'))
+			if (gb.Seen('Y'))
 			{
-				params.SetEndstopAdjustment(Y_AXIS, gb->GetFValue());
+				params.SetEndstopAdjustment(Y_AXIS, gb.GetFValue());
 				seen = true;
 			}
-			if (gb->Seen('Z'))
+			if (gb.Seen('Z'))
 			{
-				params.SetEndstopAdjustment(Z_AXIS, gb->GetFValue());
+				params.SetEndstopAdjustment(Z_AXIS, gb.GetFValue());
 				seen = true;
 			}
-			if (gb->Seen('A'))
+			if (gb.Seen('A'))
 			{
-				params.SetXTilt(gb->GetFValue() * 0.01);
+				params.SetXTilt(gb.GetFValue() * 0.01);
 				seen = true;
 			}
-			if (gb->Seen('B'))
+			if (gb.Seen('B'))
 			{
-				params.SetYTilt(gb->GetFValue() * 0.01);
+				params.SetYTilt(gb.GetFValue() * 0.01);
 				seen = true;
 			}
 
@@ -5640,7 +5640,7 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		break;
 
 	case 667: // Set CoreXY mode
-		if (!AllMovesAreFinishedAndMoveBufferIsLoaded())
+		if (!LockMovementAndWaitForStandstill(gb))
 		{
 			return false;
 		}
@@ -5649,16 +5649,16 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 			bool seen = false;
 			float positionNow[DRIVES];
 			move->GetCurrentUserPosition(positionNow, 0);					// get the current position, we may need it later
-			if (gb->Seen('S'))
+			if (gb.Seen('S'))
 			{
-				move->SetCoreXYMode(gb->GetIValue());
+				move->SetCoreXYMode(gb.GetIValue());
 				seen = true;
 			}
 			for (size_t axis = 0; axis < numAxes; ++axis)
 			{
-				if (gb->Seen(axisLetters[axis]))
+				if (gb.Seen(axisLetters[axis]))
 				{
-					move->SetCoreAxisFactor(axis, gb->GetFValue());
+					move->SetCoreAxisFactor(axis, gb.GetFValue());
 					seen = true;
 				}
 			}
@@ -5685,10 +5685,10 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 			struct tm * const timeInfo = gmtime(&now);
 			bool seen = false;
 
-			if (gb->Seen('P'))
+			if (gb.Seen('P'))
 			{
 				// Set date
-				const char * const dateString = gb->GetString();
+				const char * const dateString = gb.GetString();
 				if (strptime(dateString, "%Y-%m-%d", timeInfo) != nullptr)
 				{
 					if (!platform->SetDate(mktime(timeInfo)))
@@ -5708,10 +5708,10 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 				seen = true;
 			}
 
-			if (gb->Seen('S'))
+			if (gb.Seen('S'))
 			{
 				// Set time
-				const char * const timeString = gb->GetString();
+				const char * const timeString = gb.GetString();
 				if (strptime(timeString, "%H:%M:%S", timeInfo) != nullptr)
 				{
 					if (!platform->SetTime(mktime(timeInfo)))
@@ -5750,26 +5750,31 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 
 	case 906: // Set/report Motor currents
 	case 913: // Set/report motor current percent
-		if (!AllMovesAreFinishedAndMoveBufferIsLoaded())
-		{
-			return false;
-		}
 		{
 			bool seen = false;
 			for (size_t axis = 0; axis < numAxes; axis++)
 			{
-				if (gb->Seen(axisLetters[axis]))
+				if (gb.Seen(axisLetters[axis]))
 				{
-					platform->SetMotorCurrent(axis, gb->GetFValue(), code == 913);
+					if (!LockMovementAndWaitForStandstill(gb))
+					{
+						return false;
+					}
+					platform->SetMotorCurrent(axis, gb.GetFValue(), code == 913);
 					seen = true;
 				}
 			}
 
-			if (gb->Seen(extrudeLetter))
+			if (gb.Seen(extrudeLetter))
 			{
+				if (!LockMovementAndWaitForStandstill(gb))
+				{
+					return false;
+				}
+
 				float eVals[MaxExtruders];
 				size_t eCount = numExtruders;
-				gb->GetFloatArray(eVals, eCount, true);
+				gb.GetFloatArray(eVals, eCount, true);
 				// 2014-09-29 DC42: we no longer insist that the user supplies values for all possible extruder drives
 				for (size_t e = 0; e < eCount; e++)
 				{
@@ -5778,9 +5783,9 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 				seen = true;
 			}
 
-			if (code == 906 && gb->Seen('I'))
+			if (code == 906 && gb.Seen('I'))
 			{
-				float idleFactor = gb->GetFValue();
+				float idleFactor = gb.GetFValue();
 				if (idleFactor >= 0 && idleFactor <= 100.0)
 				{
 					platform->SetIdleCurrentFactor(idleFactor/100.0);
@@ -5814,9 +5819,9 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 
 	case 912: // Set electronics temperature monitor adjustment
 		// Currently we ignore the P parameter (i.e. temperature measurement channel)
-		if (gb->Seen('S'))
+		if (gb.Seen('S'))
 		{
-			platform->SetMcuTemperatureAdjust(gb->GetFValue());
+			platform->SetMcuTemperatureAdjust(gb.GetFValue());
 		}
 		else
 		{
@@ -5827,7 +5832,7 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 	// For case 913, see 906
 
 	case 997: // Perform firmware update
-		if (!AllMovesAreFinishedAndMoveBufferIsLoaded())
+		if (!LockMovementAndWaitForStandstill(gb))
 		{
 			return false;
 		}
@@ -5837,11 +5842,11 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		if (firmwareUpdateModuleMap == 0)					// have we worked out which modules to update?
 		{
 			// Find out which modules we have been asked to update
-			if (gb->Seen('S'))
+			if (gb.Seen('S'))
 			{
 				long modulesToUpdate[3];
 				size_t numUpdateModules = ARRAY_SIZE(modulesToUpdate);
-				gb->GetLongArray(modulesToUpdate, numUpdateModules);
+				gb.GetLongArray(modulesToUpdate, numUpdateModules);
 				for (size_t i = 0; i < numUpdateModules; ++i)
 				{
 					long t = modulesToUpdate[i];
@@ -5886,15 +5891,15 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 			return false;
 		}
 
-		state = GCodeState::flashing1;
+		gb.MachineState().state = GCodeState::flashing1;
 		break;
 
 	case 998:
 		// The input handling code replaces the gcode by this when it detects a checksum error.
 		// Since we have no way of asking for the line to be re-sent, just report an error.
-		if (gb->Seen('P'))
+		if (gb.Seen('P'))
 		{
-			int val = gb->GetIValue();
+			int val = gb.GetIValue();
 			if (val != 0)
 			{
 				reply.printf("Checksum error on line %d", val);
@@ -5907,7 +5912,7 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 		if (result)
 		{
 			reprap.EmergencyStop();			// this disables heaters and drives - Duet WiFi pre-production boards need drives disabled here
-			uint16_t reason = (gb->Seen('P') && StringStartsWith(gb->GetString(), "ERASE"))
+			uint16_t reason = (gb.Seen('P') && StringStartsWith(gb.GetString(), "ERASE"))
 											? (uint16_t)SoftwareResetReason::erase
 											: (uint16_t)SoftwareResetReason::user;
 			platform->SoftwareReset(reason);			// doesn't return
@@ -5916,50 +5921,53 @@ bool GCodes::HandleMcode(GCodeBuffer* gb, StringRef& reply)
 
 	default:
 		error = true;
-		reply.printf("unsupported command: %s", gb->Buffer());
+		reply.printf("unsupported command: %s", gb.Buffer());
 	}
 
-	// Note that we send a reply to M105 requests even if the status is not 'normal', because we reply to these requests even when we are in other states
-	if (result && (state == GCodeState::normal || GCodeBuffer::IsPollCode(code)))
+	if (result && gb.MachineState().state == GCodeState::normal)
 	{
+		UnlockAll(gb);
 		HandleReply(gb, error, reply.Pointer());
 	}
 	return result;
 }
 
-bool GCodes::HandleTcode(GCodeBuffer* gb, StringRef& reply)
+bool GCodes::HandleTcode(GCodeBuffer& gb, StringRef& reply)
 {
-	if (!AllMovesAreFinishedAndMoveBufferIsLoaded())
+	if (!LockMovementAndWaitForStandstill(gb))
 	{
 		return false;
 	}
 
-	newToolNumber = gb->GetIValue();
-	newToolNumber += gb->GetToolNumberAdjust();
+	newToolNumber = gb.GetIValue();
+	newToolNumber += gb.GetToolNumberAdjust();
+
+	// TODO for the tool change restore point to be useful, we should undo any X axis mapping and remove any tool offsets
 	for (size_t drive = 0; drive < DRIVES; ++drive)
 	{
 		toolChangeRestorePoint.moveCoords[drive] = moveBuffer.coords[drive];
 	}
 	toolChangeRestorePoint.feedRate = feedRate;
 
-	if (simulationMode != 0)						// we don't yet simulate any T codes
+	if (simulationMode == 0)						// we don't yet simulate any T codes
 	{
-		HandleReply(gb, false, "");
-	}
-	else
-	{
-		// If old and new are the same we no longer follow the sequence. Use can deselect and then reselect the tool if he wants the macros run.
 		const Tool * const oldTool = reprap.GetCurrentTool();
+		// If old and new are the same we no longer follow the sequence. User can deselect and then reselect the tool if he wants the macros run.
 		if (oldTool->Number() != newToolNumber)
 		{
-			state = GCodeState::toolChange1;
+			gb.MachineState().state = GCodeState::toolChange1;
 			if (oldTool != nullptr && AllAxesAreHomed())
 			{
 				scratchString.printf("tfree%d.g", oldTool->Number());
-				DoFileMacro(scratchString.Pointer(), false);
+				DoFileMacro(gb, scratchString.Pointer(), false);
 			}
+			return true;							// proceeding with state machine, so don't unlock or send a reply
 		}
 	}
+
+	// If we get here, we have finished
+	UnlockAll(gb);
+	HandleReply(gb, false, "");
 	return true;
 }
 
@@ -6014,6 +6022,7 @@ void GCodes::CancelPrint()
 	fileInput->Reset();
 	fileGCode->Init();
 
+	FileData& fileBeingPrinted = fileGCode->OriginalMachineState().fileState;
 	if (fileBeingPrinted.IsLive())
 	{
 		fileBeingPrinted.Close();
@@ -6058,13 +6067,13 @@ bool GCodes::IsPaused() const
 
 bool GCodes::IsPausing() const
 {
-	const GCodeState topState = (stackPointer == 0) ? state : stack[0].state;
+	const GCodeState topState = fileGCode->OriginalMachineState().state;
 	return topState == GCodeState::pausing1 || topState == GCodeState::pausing2;
 }
 
 bool GCodes::IsResuming() const
 {
-	const GCodeState topState = (stackPointer == 0) ? state : stack[0].state;
+	const GCodeState topState = fileGCode->OriginalMachineState().state;
 	return topState == GCodeState::resuming1 || topState == GCodeState::resuming2 || topState == GCodeState::resuming3;
 }
 
@@ -6189,6 +6198,80 @@ bool GCodes::AllAxesAreHomed() const
 void GCodes::SetAllAxesNotHomed()
 {
 	axesHomed = 0;
+}
+
+// Resource locking/unlocking
+
+// Lock the resource, returning true if success
+bool GCodes::LockResource(const GCodeBuffer& gb, Resource r)
+{
+	if (resourceOwners[r] == &gb)
+	{
+		return true;
+	}
+	if (resourceOwners[r] == nullptr)
+	{
+		resourceOwners[r] = &gb;
+		gb.MachineState().lockedResources |= (1 << r);
+		return true;
+	}
+	return false;
+}
+
+bool GCodes::LockHeater(const GCodeBuffer& gb, int heater)
+{
+	if (heater >= 0 && heater < HEATERS)
+	{
+		return LockResource(gb, HeaterResourceBase + heater);
+	}
+	return true;
+}
+
+bool GCodes::LockFan(const GCodeBuffer& gb, int fan)
+{
+	if (fan >= 0 && fan < (int)NUM_FANS)
+	{
+		return LockResource(gb, FanResourceBase + fan);
+	}
+	return true;
+}
+
+// Lock the unshareable parts of the file system
+bool GCodes::LockFileSystem(const GCodeBuffer &gb)
+{
+	return LockResource(gb, FileSystemResource);
+}
+
+// Lock movement
+bool GCodes::LockMovement(const GCodeBuffer& gb)
+{
+	return LockResource(gb, MoveResource);
+}
+
+// Lock movement and wait for pending moves to finish
+bool GCodes::LockMovementAndWaitForStandstill(const GCodeBuffer& gb)
+{
+	bool b = LockMovement(gb);
+	if (b)
+	{
+		b = AllMovesAreFinishedAndMoveBufferIsLoaded();
+	}
+	return b;
+}
+
+// Release all locks, except those that were owned when the current macro was started
+void GCodes::UnlockAll(const GCodeBuffer& gb)
+{
+	const GCodeMachineState * const mc = gb.MachineState().previous;
+	const uint32_t resourcesToKeep = (mc == nullptr) ? 0 : mc->lockedResources;
+	for (size_t i = 0; i < NumResources; ++i)
+	{
+		if (resourceOwners[i] == &gb && ((1 << i) & resourcesToKeep) == 0)
+		{
+			resourceOwners[i] = nullptr;
+			gb.MachineState().lockedResources &= ~(1 << i);
+		}
+	}
 }
 
 // End

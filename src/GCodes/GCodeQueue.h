@@ -18,7 +18,7 @@ class GCodeQueue
 	public:
 		GCodeQueue();
 		
-		bool QueueCode(GCodeBuffer *gb);							// Attempt to queue a G-code and return true on success
+		bool QueueCode(GCodeBuffer &gb);							// Attempt to queue a G-code and return true on success
 		bool FillBuffer(GCodeBuffer *gb);							// If there is another move to execute at this time, fill a buffer
 		void PurgeEntries(unsigned int skippedMoves);				// Remove stored codes if the print is being paused
 		void Clear();												// Clean up all stored codes
@@ -45,7 +45,7 @@ class QueuedCode
 		unsigned int executeAtMove;
 		int toolNumberAdjust;
 
-		void AssignFrom(GCodeBuffer *gb);
+		void AssignFrom(GCodeBuffer &gb);
 		void AssignTo(GCodeBuffer *gb);
 };
 

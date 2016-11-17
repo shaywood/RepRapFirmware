@@ -30,14 +30,14 @@ bool StreamGCodeInput::FillBuffer(GCodeBuffer *gb)
 		if (gb->WritingFileDirectory() == reprap.GetPlatform()->GetWebDir())
 		{
 			// HTML uploads are handled by the GCodes class
-			reprap.GetGCodes()->WriteHTMLToFile(c, gb);
+			reprap.GetGCodes()->WriteHTMLToFile(*gb, c);
 		}
 		else if (gb->Put(c))
 		{
 			// Check if we can finish a file upload
 			if (gb->WritingFileDirectory() != nullptr)
 			{
-				reprap.GetGCodes()->WriteGCodeToFile(gb);
+				reprap.GetGCodes()->WriteGCodeToFile(*gb);
 				gb->SetFinished(true);
 			}
 
@@ -85,14 +85,14 @@ bool RegularGCodeInput::FillBuffer(GCodeBuffer *gb)
 		if (gb->WritingFileDirectory() == reprap.GetPlatform()->GetWebDir())
 		{
 			// HTML uploads are handled by the GCodes class
-			reprap.GetGCodes()->WriteHTMLToFile(c, gb);
+			reprap.GetGCodes()->WriteHTMLToFile(*gb, c);
 		}
 		else if (gb->Put(c))
 		{
 			// Check if we can finish a file upload
 			if (gb->WritingFileDirectory() != nullptr)
 			{
-				reprap.GetGCodes()->WriteGCodeToFile(gb);
+				reprap.GetGCodes()->WriteGCodeToFile(*gb);
 				gb->SetFinished(true);
 			}
 
@@ -227,7 +227,7 @@ size_t RegularGCodeInput::BufferSpaceLeft() const
 // File-based G-code input source
 
 
-// Reset this input. Should also be called when the associated file is being closed
+// Reset this input. Should be called when the associated file is being closed
 void FileGCodeInput::Reset()
 {
 	lastFile = nullptr;

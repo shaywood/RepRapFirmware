@@ -3,7 +3,7 @@
 #
 # written by Christian Hammacher, 2016
 
-VERSION := 1.17-dev6
+VERSION := 1.17-dev7
 DATE := 2016-12-30
 
 GCC_VERSION := 4.8.3-2014q1
@@ -64,7 +64,7 @@ OBJCOPY := $(GCC_PATH)/bin/$(CROSS_COMPILE)objcopy
 # ================================= Target all ======================================
 
 .PHONY := all
-all: duet duetng
+all: duet duetng radds
 
 duet:
 	@echo "------------ Building RepRapFirmware for Duet ------------"
@@ -74,18 +74,26 @@ duetng:
 	@echo "----------- Building RepRapFirmware for DuetNG -----------"
 	@$(MAKE) --no-print-directory CC=$(CC) CXX=$(CXX) LD=$(LD) OBJCOPY=$(OBJCOPY) OPTIMISATION=$(OPTIMISATION) DUET_BOARD_PATH=$(DUET_BOARD_PATH) DUET_LIBRARY_PATH=$(DUET_LIBRARY_PATH) VERSION=$(VERSION) DATE=$(DATE) -f $(PWD)/DuetNG/duetNG.mk
 
+radds:
+	@echo "----------- Building RepRapFirmware for RADDS -----------"
+	@$(MAKE) --no-print-directory CC=$(CC) CXX=$(CXX) LD=$(LD) OBJCOPY=$(OBJCOPY) OPTIMISATION=$(OPTIMISATION) DUET_BOARD_PATH=$(DUET_BOARD_PATH) DUET_LIBRARY_PATH=$(DUET_LIBRARY_PATH) VERSION=$(VERSION) DATE=$(DATE) -f $(PWD)/RADDS/radds.mk
+
 
 # ================================= Target clean ====================================
 .PHONY += clean
 clean:
 	@$(MAKE) --no-print-directory -f $(PWD)/Duet/duet.mk clean
 	@$(MAKE) --no-print-directory -f $(PWD)/DuetNG/duetNG.mk clean
+	@$(MAKE) --no-print-directory -f $(PWD)/RADDS/radds.mk clean
 
 
 # ================================= Target upload ===================================
-.PHONY += upload_duet upload_duetng
+.PHONY += upload_duet upload_duetng upload_radds
 upload_duet:
 	@$(MAKE) --no-print-directory CC=$(CC) CXX=$(CXX) LD=$(LD) OBJCOPY=$(OBJCOPY) OPTIMISATION=$(OPTIMISATION) DUET_BOARD_PATH=$(DUET_BOARD_PATH) DUET_LIBRARY_PATH=$(DUET_LIBRARY_PATH) BOSSAC_PATH=$(BOSSAC_PATH) VERSION=$(VERSION) DATE=$(DATE) -f $(PWD)/Duet/duet.mk upload
 
 upload_duetng:
 	@$(MAKE) --no-print-directory CC=$(CC) CXX=$(CXX) LD=$(LD) OBJCOPY=$(OBJCOPY) OPTIMISATION=$(OPTIMISATION) DUET_BOARD_PATH=$(DUET_BOARD_PATH) DUET_LIBRARY_PATH=$(DUET_LIBRARY_PATH) BOSSAC_4E_PATH=$(BOSSAC_4E_PATH) VERSION=$(VERSION) DATE=$(DATE) -f $(PWD)/DuetNG/duetNG.mk upload
+
+upload_radds:
+	@$(MAKE) --no-print-directory CC=$(CC) CXX=$(CXX) LD=$(LD) OBJCOPY=$(OBJCOPY) OPTIMISATION=$(OPTIMISATION) DUET_BOARD_PATH=$(DUET_BOARD_PATH) DUET_LIBRARY_PATH=$(DUET_LIBRARY_PATH) BOSSAC_PATH=$(BOSSAC_PATH) VERSION=$(VERSION) DATE=$(DATE) -f $(PWD)/RADDS/radds.mk upload

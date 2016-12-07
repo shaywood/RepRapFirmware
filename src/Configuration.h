@@ -99,7 +99,7 @@ const float DefaultMaxHeatingFaultTime = 5.0;		// How many seconds we allow a he
 const float AllowedTemperatureDerivativeNoise = 0.25;	// How much fluctuation in the averaged temperature derivative we allow
 const float MaxAmbientTemperature = 45.0;			// We expect heaters to cool to this temperature or lower when switched off
 const float NormalAmbientTemperature = 25.0;		// The ambient temperature we assume - allow for the printer heating its surroundings a little
-const float DefaultMaxTempExcursion = 10.0;			// How much error we tolerate when maintaining temperature before deciding that a heater fault has occurred
+const float DefaultMaxTempExcursion = 15.0;			// How much error we tolerate when maintaining temperature before deciding that a heater fault has occurred
 const float MinimumConnectedTemperature = -5.0;		// Temperatures below this we treat as a disconnected thermistor
 
 static_assert(DefaultMaxTempExcursion > TEMPERATURE_CLOSE_ENOUGH, "DefaultMaxTempExcursion is too low");

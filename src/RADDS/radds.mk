@@ -38,7 +38,7 @@ CFLAGS := -DVERSION=\"$(VERSION)\" -DDATE=\"$(DATE)\" -D__SAM3X8E__ -D__RADDS__ 
 CPPFLAGS := -DVERSION=\"$(VERSION)\" -DDATE=\"$(DATE)\" -D__SAM3X8E__ -D__RADDS__ -Dprintf=iprintf -Wall -c -std=gnu++11 -mcpu=cortex-m3 -mthumb -ffunction-sections -fdata-sections -fno-threadsafe-statics -fno-rtti -fno-exceptions -nostdlib --param max-inline-insns-single=500 -MMD -MP
 
 FORCESYM := -u _sbrk -u link -u _close -u _fstat -u _isatty -u _lseek -u _read -u _write -u _exit -u kill -u _getpid
-LDFLAGS := -L"$(DUET_BOARD_PATH)/variants/RADDS" $(OPTIMISATION) -Wl,--gc-sections -Wl,--fatal-warnings -mcpu=cortex-m3 -T"$(DUET_BOARD_PATH)/variants/RADDS/linker_scripts/gcc/flash.ld" -Wl,-Map,"$(OUTPUT_PATH)/RepRapFirmware-$(VERSION).map" -o "$(OUTPUT_PATH)/RepRapFirmware-$(VERSION).elf" -mthumb -Wl,--cref -Wl,--check-sections -Wl,--gc-sections -Wl,--entry=Reset_Handler -Wl,--unresolved-symbols=report-all -Wl,--warn-common -Wl,--warn-section-align -Wl,--warn-unresolved-symbols -Wl,--start-group $(FORCESYM) $(BUILD_PATH)/*.o -lDuet -Wl,--end-group -lm -gcc
+LDFLAGS := -L"$(DUET_BOARD_PATH)/variants/RADDS" $(OPTIMISATION) -Wl,--gc-sections -Wl,--fatal-warnings -mcpu=cortex-m3 -T"$(DUET_BOARD_PATH)/variants/RADDS/linker_scripts/gcc/flash.ld" -Wl,-Map,"$(OUTPUT_PATH)/RepRapFirmware-$(VERSION).map" -o "$(OUTPUT_PATH)/RepRapFirmware-$(VERSION).elf" -mthumb -Wl,--cref -Wl,--check-sections -Wl,--gc-sections -Wl,--entry=Reset_Handler -Wl,--unresolved-symbols=report-all -Wl,--warn-common -Wl,--warn-section-align -Wl,--warn-unresolved-symbols -Wl,--start-group $(FORCESYM) $(BUILD_PATH)/*.o -lRADDS -Wl,--end-group -lm -gcc
 
 
 # ================================= Target all ======================================

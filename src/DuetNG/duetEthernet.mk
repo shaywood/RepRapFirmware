@@ -1,4 +1,4 @@
-# Makefile for RepRapFirmware-DuetNG (SAM4E8E)
+# Makefile for RepRapFirmware (Duet Ethernet, SAM4E8E)
 # written by Christian Hammacher
 #
 # Licensed under the terms of the GNU Public License v2
@@ -6,8 +6,8 @@
 #
 
 # Workspace directories
-BUILD_PATH := $(PWD)/../Release/Duet-WiFi/obj
-OUTPUT_PATH := $(PWD)/../Release/Duet-WiFi
+BUILD_PATH := $(PWD)/../Release/Duet-Ethernet/obj
+OUTPUT_PATH := $(PWD)/../Release/Duet-Ethernet
 
 # Firmware port for 1200bps touch
 PRIMARY_PORT := /dev/ttyACM0
@@ -20,10 +20,10 @@ INCLUDES := -I"$(DUET_BOARD_PATH)/cores/arduino" -I"$(DUET_BOARD_PATH)/asf" -I"$
 INCLUDES += -I"$(DUET_LIBRARY_PATH)/Flash" -I"$(DUET_LIBRARY_PATH)/RTCDue" -I"$(DUET_LIBRARY_PATH)/SharedSpi" -I"$(DUET_LIBRARY_PATH)/Storage" -I"$(DUET_LIBRARY_PATH)/Wire"
 
 # Set board options
-INCLUDES += -I"$(PWD)" -I"$(PWD)/DuetNG"
+INCLUDES += -I"$(PWD)" -I"$(PWD)/DuetNG" -I"$(PWD)/DuetNG/DuetEthernet"
 
 # Get source files
-VPATH := $(PWD) $(PWD)/DuetNG $(PWD)/GCodes $(PWD)/Heating $(PWD)/Movement $(PWD)/Storage
+VPATH := $(PWD) $(PWD)/DuetNG $(PWD)/DuetNG/DuetEthernet $(PWD)/GCodes $(PWD)/Heating $(PWD)/Movement $(PWD)/Storage
 VPATH += $(PWD)/Libraries/Fatfs $(PWD)/Libraries/General $(PWD)/Libraries/Math $(PWD)/Libraries/MCP4461 $(PWD)/Libraries/TemperatureSensor $(PWD)/Libraries/sha1
 
 C_SOURCES += $(foreach dir,$(VPATH),$(wildcard $(dir)/*.c)) $(wildcard $(PWD)/*.c)
@@ -35,26 +35,26 @@ CPP_OBJS := $(foreach src,$(CPP_SOURCES),$(BUILD_PATH)/$(notdir $(src:.cpp=.cpp.
 DEPS := $(C_OBJS:%.o=%.d) $(CPP_OBJS:%.o=%.d)
 
 # Set GCC options
-CFLAGS := -DVERSION=\"$(VERSION)\" -DDATE=\"$(DATE)\" -D__SAM4E8E__ -DDUET_NG -Dprintf=iprintf
+CFLAGS := -DVERSION=\"$(VERSION)\" -DDATE=\"$(DATE)\" -D__SAM4E8E__ -DDUET_NG -DDUET_ETHERNET -Dprintf=iprintf
 CFLAGS += -Wall -c -std=gnu11 -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=softfp -ffunction-sections -fdata-sections -nostdlib --param max-inline-insns-single=500 -MMD -MP
-CPPFLAGS := -DVERSION=\"$(VERSION)\" -DDATE=\"$(DATE)\" -D__SAM4E8E__ -DDUET_NG -Dprintf=iprintf
+CPPFLAGS := -DVERSION=\"$(VERSION)\" -DDATE=\"$(DATE)\" -D__SAM4E8E__ -DDUET_NG -DDUET_ETHERNET -Dprintf=iprintf
 CPPFLAGS += -Wall -c -std=gnu++11 -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=softfp -ffunction-sections -fdata-sections -fno-threadsafe-statics -fno-rtti -fno-exceptions -nostdlib --param max-inline-insns-single=500 -MMD -MP
 
 
 FORCESYM := -u _sbrk -u link -u _close -u _fstat -u _isatty -u _lseek -u _read -u _write -u _exit -u kill -u _getpid
-LDFLAGS := -L"$(DUET_BOARD_PATH)/variants/duetNG" $(OPTIMISATION) -Wl,--gc-sections -Wl,--fatal-warnings -mcpu=cortex-m4 -T"$(DUET_BOARD_PATH)/variants/duetNG/linker_scripts/gcc/flash.ld" -Wl,-Map,"$(OUTPUT_PATH)/DuetWiFiFirmware-$(VERSION).map" -o "$(OUTPUT_PATH)/DuetWiFiFirmware-$(VERSION).elf" -mthumb -Wl,--cref -Wl,--check-sections -Wl,--gc-sections -Wl,--entry=Reset_Handler -Wl,--unresolved-symbols=report-all -Wl,--warn-common -Wl,--warn-section-align -Wl,--warn-unresolved-symbols -Wl,--start-group $(FORCESYM) $(BUILD_PATH)/*.o -lDuetNG -Wl,--end-group -lm -gcc
+LDFLAGS := -L"$(DUET_BOARD_PATH)/variants/duetNG" $(OPTIMISATION) -Wl,--gc-sections -Wl,--fatal-warnings -mcpu=cortex-m4 -T"$(DUET_BOARD_PATH)/variants/duetNG/linker_scripts/gcc/flash.ld" -Wl,-Map,"$(OUTPUT_PATH)/DuetEthernet-$(VERSION).map" -o "$(OUTPUT_PATH)/DuetEthernet-$(VERSION).elf" -mthumb -Wl,--cref -Wl,--check-sections -Wl,--gc-sections -Wl,--entry=Reset_Handler -Wl,--unresolved-symbols=report-all -Wl,--warn-common -Wl,--warn-section-align -Wl,--warn-unresolved-symbols -Wl,--start-group $(FORCESYM) $(BUILD_PATH)/*.o -lDuetNG -Wl,--end-group -lm -gcc
 
 
 # ================================= Target all ======================================
 .PHONY += all
-all: $(OUTPUT_PATH)/DuetWiFiFirmware-$(VERSION).bin
-$(OUTPUT_PATH)/DuetWiFiFirmware-$(VERSION).bin: $(OUTPUT_PATH)/DuetWiFiFirmware-$(VERSION).elf
-	@echo "  BIN     ../Release/Duet-WiFi/DuetWiFiFirmware-$(VERSION).bin"
-	@$(OBJCOPY) -O binary $(OUTPUT_PATH)/DuetWiFiFirmware-$(VERSION).elf $(OUTPUT_PATH)/DuetWiFiFirmware-$(VERSION).bin
+all: $(OUTPUT_PATH)/DuetEthernet-$(VERSION).bin
+$(OUTPUT_PATH)/DuetEthernet-$(VERSION).bin: $(OUTPUT_PATH)/DuetEthernet-$(VERSION).elf
+	@echo "  BIN     ../Release/Duet-Ethernet/DuetEthernet-$(VERSION).bin"
+	@$(OBJCOPY) -O binary $(OUTPUT_PATH)/DuetEthernet-$(VERSION).elf $(OUTPUT_PATH)/DuetEthernet-$(VERSION).bin
 
-$(OUTPUT_PATH)/DuetWiFiFirmware-$(VERSION).elf: $(BUILD_PATH) $(OUTPUT_PATH) $(C_OBJS) $(CPP_OBJS)
-	@echo "  LD      ../Release/Duet-WiFi/DuetWiFiFirmware-$(VERSION).elf"
-	@$(LD) $(LDFLAGS) -o $(OUTPUT_PATH)/DuetWiFiFirmware-$(VERSION).elf
+$(OUTPUT_PATH)/DuetEthernet-$(VERSION).elf: $(BUILD_PATH) $(OUTPUT_PATH) $(C_OBJS) $(CPP_OBJS)
+	@echo "  LD      ../Release/Duet-Ethernet/DuetEthernet-$(VERSION).elf"
+	@$(LD) $(LDFLAGS) -o $(OUTPUT_PATH)/DuetEthernet-$(VERSION).elf
 -include $(DEPS)
 
 $(BUILD_PATH)/%.c.o: %.c
@@ -75,20 +75,20 @@ $(OUTPUT_PATH):
 # ================================= Target clean ====================================
 .PHONY += clean
 clean:
-	@rm -rf $(BUILD_PATH) $(OUTPUT_PATH)/DuetWiFiFirmware-*.bin
+	@rm -rf $(BUILD_PATH) $(OUTPUT_PATH)/DuetEthernet-*.bin
 	$(info DuetNG firmware builds removed.)
 
 
 # ================================= Target upload ===================================
 .PHONY += upload
-upload: $(OUTPUT_PATH)/DuetWiFiFirmware-$(VERSION).bin
+upload: $(OUTPUT_PATH)/DuetEthernet-$(VERSION).bin
 	@echo "=> Rebooting hardware into bootloader mode..."
 	@stty -F $(PRIMARY_PORT) 115200 -ixon crtscts || true
 	@echo "M999 PERASE" > $(PRIMARY_PORT) || true
 	@sleep 2
 	@echo "=> Flashing new firmware binary..."
-	@cp $(OUTPUT_PATH)/DuetWiFiFirmware-$(VERSION).bin $(OUTPUT_PATH)/DuetWiFiFirmware.bin
+	@cp $(OUTPUT_PATH)/DuetEthernet-$(VERSION).bin $(OUTPUT_PATH)/DuetEthernet.bin
 	@test -s $(PRIMARY_PORT) || $(BOSSAC_4E_PATH) $(PRIMARY_PORT) at91sam4e8-ek ./DuetNG/flash.txt || true
 	@test -s $(SECONDARY_PORT) || $(BOSSAC_4E_PATH) $(SECONDARY_PORT) at91sam4e8-ek ./DuetNG/flash.txt || true
-	@rm $(OUTPUT_PATH)/DuetWiFiFirmware.bin
+	@rm $(OUTPUT_PATH)/DuetEthernet.bin
 	@echo "=> Flashing complete! Reset your board to boot the new firmware."

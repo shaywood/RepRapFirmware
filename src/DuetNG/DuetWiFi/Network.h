@@ -46,7 +46,7 @@ class Network
 	};
 
 public:
-	const uint8_t *IPAddress() const;
+	const uint8_t *GetIPAddress() const;
 	void SetIPAddress(const uint8_t ipAddress[], const uint8_t netmask[], const uint8_t gateway[]);
 
 	Network(Platform* p);
@@ -70,11 +70,6 @@ public:
 
 	void SetHostname(const char *name);
 	void EspRequestsTransfer();
-
-#if 0
-	void AcquireBus();
-	void ReleaseBus();
-#endif
 
 	const char *GetRequest(uint32_t& ip, size_t& length, uint32_t& fragment) const;
 	void SendReply(uint32_t ip, unsigned int code, OutputBuffer *body);

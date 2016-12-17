@@ -2025,7 +2025,7 @@ void Webserver::FtpInterpreter::ProcessLine()
 			else if (StringEquals(clientMessage, "PASV"))
 			{
 				/* get local IP address */
-				const byte *ip_address = network->IPAddress();
+				const byte *ip_address = network->GetIPAddress();
 
 				/* open random port > 1023 */
 				//rand();		// TRNG doesn't require this

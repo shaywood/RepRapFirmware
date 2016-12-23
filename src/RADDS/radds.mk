@@ -72,7 +72,7 @@ $(OUTPUT_PATH):
 .PHONY += clean
 clean:
 	@rm -rf $(BUILD_PATH) $(OUTPUT_PATH)/RepRapFirmware-*.bin
-	$(info Duet firmware builds removed.)
+	$(info RADDS firmware builds removed.)
 
 
 # ================================= Target upload ===================================

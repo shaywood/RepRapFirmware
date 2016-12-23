@@ -76,7 +76,7 @@ $(OUTPUT_PATH):
 .PHONY += clean
 clean:
 	@rm -rf $(BUILD_PATH) $(OUTPUT_PATH)/DuetWiFiFirmware-*.bin
-	$(info DuetNG firmware builds removed.)
+	$(info DuetWiFi firmware builds removed.)
 
 
 # ================================= Target upload ===================================
@@ -88,7 +88,7 @@ upload: $(OUTPUT_PATH)/DuetWiFiFirmware-$(VERSION).bin
 	@sleep 2
 	@echo "=> Flashing new firmware binary..."
 	@cp $(OUTPUT_PATH)/DuetWiFiFirmware-$(VERSION).bin $(OUTPUT_PATH)/DuetWiFiFirmware.bin
-	@test -s $(PRIMARY_PORT) || $(BOSSAC_4E_PATH) $(PRIMARY_PORT) at91sam4e8-ek ./DuetNG/flash.txt || true
-	@test -s $(SECONDARY_PORT) || $(BOSSAC_4E_PATH) $(SECONDARY_PORT) at91sam4e8-ek ./DuetNG/flash.txt || true
+	@test -s $(PRIMARY_PORT) || $(BOSSAC_4E_PATH) $(PRIMARY_PORT) at91sam4e8-ek ./DuetNG/flash_wifi.txt || true
+	@test -s $(SECONDARY_PORT) || $(BOSSAC_4E_PATH) $(SECONDARY_PORT) at91sam4e8-ek ./DuetNG/flash_wifi.txt || true
 	@rm $(OUTPUT_PATH)/DuetWiFiFirmware.bin
 	@echo "=> Flashing complete! Reset your board to boot the new firmware."

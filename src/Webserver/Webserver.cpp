@@ -83,12 +83,18 @@
  ****************************************************************************************************/
 
 #include "RepRapFirmware.h"
+#include "Webserver.h"
+#include "NetworkTransaction.h"
+#include "Platform.h"
+#include "Network.h"
+#include "RepRap.h"
+#include "GCodes/GCodes.h"
+#include "PrintMonitor.h"
 
 //***************************************************************************************************
 
 const char* overflowResponse = "overflow";
 const char* badEscapeResponse = "bad escape";
-
 
 //********************************************************************************************
 //
@@ -110,7 +116,7 @@ void Webserver::Init()
 	// initialise the webserver class
 	longWait = platform->Time();
 	webserverActive = true;
-	readingConnection = nullptr;
+	readingConnection = NoConnection;
 
 	// initialise all protocol handlers
 	httpInterpreter->ResetState();
@@ -221,7 +227,7 @@ void Webserver::Spin()
 						// calling either Commit(), Discard() or Defer()
 						if (interpreter->CharFromClient(c))
 						{
-							readingConnection = nullptr;
+							readingConnection = NoConnection;
 							break;
 						}
 					}
@@ -231,18 +237,18 @@ void Webserver::Spin()
 						// message length exceeds the TCP MSS. Notify the current ProtocolInterpreter about this,
 						// which will remove the current transaction too
 						interpreter->NoMoreDataAvailable();
-						readingConnection = nullptr;
+						readingConnection = NoConnection;
 						break;
 					}
 				}
 			}
 		}
-		else if (readingConnection != nullptr)
+		else if (readingConnection != NoConnection)
 		{
 			// We failed to find a transaction for a reading connection.
 			// This should never happen, but if it does, terminate this connection instantly
 			platform->Message(HOST_MESSAGE, "Error: Transaction for reading connection not found\n");
-			readingConnection->Terminate();
+			Network::Terminate(readingConnection);
 		}
 		network->Unlock();		// unlock LWIP again
 	}
@@ -297,10 +303,10 @@ void Webserver::HandleGCodeReply(const WebSource source, const char *reply)
 
 // Handle immediate disconnects here (cs will be freed after this call)
 // May be called by ISR, but not while LwIP is NOT locked
-void Webserver::ConnectionLost(const ConnectionState *cs)
+void Webserver::ConnectionLost(Connection conn)
 {
 	// Inform protocol handlers that this connection has been lost
-	uint16_t localPort = cs->GetLocalPort();
+	uint16_t localPort = Network::GetLocalPort(conn);
 	ProtocolInterpreter *interpreter;
 	switch (localPort)
 	{
@@ -331,14 +337,14 @@ void Webserver::ConnectionLost(const ConnectionState *cs)
 	// Print some debug information and notify the protocol interpreter
 	if (reprap.Debug(moduleWebserver))
 	{
-		platform->MessageF(HOST_MESSAGE, "ConnectionLost called for local port %d (remote port %d)\n", localPort, cs->GetRemotePort());
+		platform->MessageF(HOST_MESSAGE, "ConnectionLost called for local port %d (remote port %d)\n", localPort, Network::GetRemotePort(conn));
 	}
-	interpreter->ConnectionLost(cs);
+	interpreter->ConnectionLost(conn);
 
 	// Don't process any more data from this connection if has gone down
-	if (readingConnection == cs)
+	if (readingConnection == conn)
 	{
-		readingConnection = nullptr;
+		readingConnection = NoConnection;
 	}
 }
 
@@ -496,7 +502,7 @@ Webserver::HttpInterpreter::HttpInterpreter(Platform *p, Webserver *ws, Network 
 	: ProtocolInterpreter(p, ws, n), state(doingCommandWord), numSessions(0), clientsServed(0)
 {
 	gcodeReply = new OutputStack();
-	deferredRequestConnection = nullptr;
+	deferredRequestConnection = NoConnection;
 	seq = 0;
 }
 
@@ -857,7 +863,7 @@ void Webserver::HttpInterpreter::SendJsonResponse(const char* command)
 	if (!OutputBuffer::Allocate(jsonResponse))
 	{
 		// Reset the connection immediately if we cannot write any data. Should never happen
-		webserver->currentTransaction->GetConnection()->Terminate();
+		Network::Terminate(webserver->currentTransaction->GetConnection());
 		return;
 	}
 
@@ -1018,7 +1024,7 @@ void Webserver::HttpInterpreter::GetJsonResponse(const char* request, OutputBuff
 	}
 	else if (StringEquals(request, "fileinfo"))
 	{
-		if (deferredRequestConnection != nullptr)
+		if (deferredRequestConnection != NoConnection)
 		{
 			// Don't allow multiple deferred requests to be processed at once
 			webserver->currentTransaction->Defer(DeferralMode::ResetData);
@@ -1091,17 +1097,17 @@ void Webserver::HttpInterpreter::NoMoreDataAvailable()
 }
 
 // May be called from ISR!
-void Webserver::HttpInterpreter::ConnectionLost(const ConnectionState *cs)
+void Webserver::HttpInterpreter::ConnectionLost(Connection conn)
 {
 	// Make sure deferred requests are cancelled
-	if (deferredRequestConnection == cs)
+	if (deferredRequestConnection == conn)
 	{
 		reprap.GetPrintMonitor()->StopParsing(filenameBeingProcessed);
-		deferredRequestConnection = nullptr;
+		deferredRequestConnection = NoConnection;
 	}
 
 	// If we couldn't read an entire request from a connection, reset our state here again
-	if (webserver->readingConnection == cs)
+	if (webserver->readingConnection == conn)
 	{
 		ResetState();
 	}
@@ -1110,8 +1116,8 @@ void Webserver::HttpInterpreter::ConnectionLost(const ConnectionState *cs)
 	// because the client *might* have two instances of the web interface running.
 	if (uploadState == uploadOK)
 	{
-		const uint32_t remoteIP = cs->GetRemoteIP();
-		const uint16_t remotePort = cs->GetRemotePort();
+		const uint32_t remoteIP = Network::GetRemoteIP(conn);
+		const uint16_t remotePort = Network::GetRemotePort(conn);
 		for(size_t i = 0; i < numSessions; i++)
 		{
 			if (sessions[i].ip == remoteIP && sessions[i].isPostUploading && sessions[i].postPort == remotePort)
@@ -1149,7 +1155,7 @@ bool Webserver::HttpInterpreter::CanParseData()
 	// Are we still processing a deferred request?
 	if (deferredRequestConnection == webserver->currentTransaction->GetConnection())
 	{
-		if (deferredRequestConnection->IsConnected())
+		if (Network::IsConnected(deferredRequestConnection))
 		{
 			// Process more of this request. If it doesn't finish this time, it will be appended to the list
 			// of ready transactions again, which will ensure it can be processed later again
@@ -1515,8 +1521,8 @@ bool Webserver::HttpInterpreter::ProcessMessage()
 	}
 	else if (IsAuthenticated() && StringEquals(commandWords[0], "POST"))
 	{
-		bool isUploadRequest = (StringEquals(commandWords[1], KO_START "upload"));
-		isUploadRequest |= (commandWords[1][0] == '/' && StringEquals(commandWords[1] + 1, KO_START "upload"));
+		const bool isUploadRequest = (StringEquals(commandWords[1], KO_START "upload"))
+								  || (commandWords[1][0] == '/' && StringEquals(commandWords[1] + 1, KO_START "upload"));
 		if (isUploadRequest)
 		{
 			if (numQualKeys > 0 && StringEquals(qualifiers[0].key, "name"))
@@ -1726,7 +1732,7 @@ void Webserver::HttpInterpreter::HandleGCodeReply(const char *reply)
 void Webserver::HttpInterpreter::ProcessDeferredRequest()
 {
 	OutputBuffer *jsonResponse = nullptr;
-	const ConnectionState *lastDeferredConnection = deferredRequestConnection;
+	const Connection lastDeferredConnection = deferredRequestConnection;
 
 	// At the moment only file info requests are deferred.
 	// Parsing the file may take a while, so keep LwIP running while we're waiting
@@ -1741,7 +1747,7 @@ void Webserver::HttpInterpreter::ProcessDeferredRequest()
 		NetworkTransaction *transaction = webserver->currentTransaction;
 		if (gotFileInfo)
 		{
-			deferredRequestConnection = nullptr;
+			deferredRequestConnection = NoConnection;
 
 			// Got it - send the response now
 			transaction->Write("HTTP/1.1 200 OK\n");
@@ -1831,11 +1837,11 @@ void Webserver::FtpInterpreter::ConnectionEstablished()
 }
 
 // May be called from ISR!
-void Webserver::FtpInterpreter::ConnectionLost(const ConnectionState *cs)
+void Webserver::FtpInterpreter::ConnectionLost(Connection conn)
 {
 	connectedClients--;
 
-	if (cs->GetLocalPort() != FTP_PORT)
+	if (Network::GetLocalPort(conn) != FTP_PORT)
 	{
 		// Did everything work out? Usually this is only called for uploads
 		if (network->AcquireFTPTransaction())
@@ -1843,7 +1849,7 @@ void Webserver::FtpInterpreter::ConnectionLost(const ConnectionState *cs)
 			webserver->currentTransaction = network->GetTransaction();
 			if (state == doingPasvIO)
 			{
-				if (uploadState != uploadError && !cs->IsTerminated())
+				if (uploadState != uploadError && !Network::IsTerminated(conn))
 				{
 					SendReply(226, "Transfer complete.");
 					FinishUpload(0);
@@ -2465,7 +2471,7 @@ void Webserver::TelnetInterpreter::ConnectionEstablished()
 }
 
 // May be called from ISR!
-void Webserver::TelnetInterpreter::ConnectionLost(const ConnectionState *cs)
+void Webserver::TelnetInterpreter::ConnectionLost(Connection conn)
 {
 	connectedClients--;
 	if (connectedClients == 0)

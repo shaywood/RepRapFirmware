@@ -7,7 +7,8 @@
 #ifndef GCODEQUEUE_H
 #define GCODEQUEUE_H
 
-#include "GCodes.h"
+#include "RepRapFirmware.h"
+#include "GCodeBuffer.h"
 
 const size_t maxQueuedCodes = 8;				// How many codes can be queued?
 

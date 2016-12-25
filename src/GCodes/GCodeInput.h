@@ -8,8 +8,11 @@
 #ifndef GCODEINPUT_H
 #define GCODEINPUT_H
 
+#include "RepRapFirmware.h"
+
 #include "GCodeBuffer.h"
-#include "../Storage/FileStore.h"
+#include "Storage/FileStore.h"
+
 
 const size_t GCodeInputBufferSize = 256;				// How many bytes can we cache per input source?
 const size_t GCodeInputFileReadThreshold = 128;			// How many free bytes must be available before data is read from the SD card?

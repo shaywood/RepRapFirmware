@@ -6,8 +6,7 @@
 #include "Arduino.h"
 #include "Libraries/Fatfs/ff.h"
 
-typedef uint32_t FilePosition;
-const FilePosition noFilePosition = 0xFFFFFFFF;
+const size_t FileBufLen = 256;						// 512 would be more efficient, but need to free up some RAM first
 
 class Platform;
 

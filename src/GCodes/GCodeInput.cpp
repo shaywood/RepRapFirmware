@@ -5,12 +5,13 @@
  *      Author: Christian
  */
 
-#include "RepRapFirmware.h"
 #include "GCodeInput.h"
+
+#include "RepRap.h"
+#include "GCodes.h"
 
 
 // G-code input class for wrapping around Stream-based hardware ports
-
 
 void StreamGCodeInput::Reset()
 {
@@ -225,7 +226,6 @@ size_t RegularGCodeInput::BufferSpaceLeft() const
 
 
 // File-based G-code input source
-
 
 // Reset this input. Should be called when the associated file is being closed
 void FileGCodeInput::Reset()

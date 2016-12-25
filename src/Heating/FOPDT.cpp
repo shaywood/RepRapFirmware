@@ -6,8 +6,6 @@
  */
 
 #include "FOPDT.h"
-#include "Arduino.h"
-#include "Configuration.h"
 #include "Storage/FileStore.h"
 #include "Libraries/General/StringRef.h"
 

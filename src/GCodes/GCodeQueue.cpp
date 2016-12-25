@@ -5,9 +5,11 @@
  *      Author: Christian
  */
 
-#include "RepRapFirmware.h"
 #include "GCodeQueue.h"
 
+#include "RepRap.h"
+#include "GCodes.h"
+#include "Movement/Move.h"
 
 // GCodeQueue class
 

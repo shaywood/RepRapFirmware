@@ -25,13 +25,8 @@ Licence: GPL
 
 #include <cstddef>			// for size_t
 
-// Firmware name is now defined in the Pins file
-//
-// VERSION and DATE are now defined in the Makefile
-
 #define AUTHORS "reprappro, dc42, chrishamm, t3p3, dnewman"
 
-#define FLASH_SAVE_ENABLED	(1)
 
 // Other firmware that we might switch to be compatible with.
 
@@ -88,6 +83,10 @@ const float BAD_ERROR_TEMPERATURE = 2000.0;			// Must exceed any reasonable 5tem
 const float DefaultHotEndHeaterGain = 340.0;
 const float DefaultHotEndHeaterTimeConstant = 140.0;
 const float DefaultHotEndHeaterDeadTime = 5.5;
+
+const int8_t DefaultBedHeater = 0;
+const int8_t DefaultChamberHeater = -1;
+const int8_t DefaultE0Heater = 1;					// Index of the default first extruder heater
 
 // These parameters are about right for a typical PCB bed heater that maxes out at 110C
 const float DefaultBedHeaterGain = 90.0;

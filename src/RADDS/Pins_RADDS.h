@@ -1,7 +1,7 @@
 #ifndef PINS_DUET_H__
 #define PINS_DUET_H__
 
-#define FIRMWARE_NAME "RepRapFirmware for RADDS"
+#define FIRMWARE_NAME "RepRapFirmware for RADDS (ch fork)"
 
 const size_t NumFirmwareUpdateModules = 1;
 #define IAP_UPDATE_FILE "iapradds.bin"

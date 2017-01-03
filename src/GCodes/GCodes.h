@@ -25,12 +25,10 @@ Licence: GPL
 #include "RepRapFirmware.h"
 #include "Libraries/sha1/sha1.h"
 #include "Platform.h"		// for type EndStopHit
-#include "Webserver.h"		// for type WebSource
-
 #include "GCodeInput.h"
-#include "GCodeQueue.h"
 
 class GCodeBuffer;
+class GCodeQueue;
 
 const char feedrateLetter = 'F';						// GCode feedrate
 const char extrudeLetter = 'E'; 						// GCode extrude
@@ -81,42 +79,42 @@ public:
 		bool canPauseAfter;												// true if we can pause just after this move and successfully restart
 	};
   
-    GCodes(Platform* p, Webserver* w);
-    void Spin();														// Called in a tight loop to make this class work
-    void Init();														// Set it up
-    void Exit();														// Shut it down
-    void Reset();														// Reset some parameter to defaults
-    bool ReadMove(RawMove& m);											// Called by the Move class to get a movement set by the last G Code
-    void ClearMove();
-    void QueueFileToPrint(const char* fileName);						// Open a file of G Codes to run
-    void DeleteFile(const char* fileName);								// Does what it says
-    void GetCurrentCoordinates(StringRef& s) const;						// Write where we are into a string
-    bool DoingFileMacro() const;										// Or still busy processing a macro file?
-    float FractionOfFilePrinted() const;								// Get fraction of file printed
-    void Diagnostics(MessageType mtype);								// Send helpful information out
+	GCodes(Platform* p, Webserver* w);
+	void Spin();														// Called in a tight loop to make this class work
+	void Init();														// Set it up
+	void Exit();														// Shut it down
+	void Reset();														// Reset some parameter to defaults
+	bool ReadMove(RawMove& m);											// Called by the Move class to get a movement set by the last G Code
+	void ClearMove();
+	void QueueFileToPrint(const char* fileName);						// Open a file of G Codes to run
+	void DeleteFile(const char* fileName);								// Does what it says
+	void GetCurrentCoordinates(StringRef& s) const;						// Write where we are into a string
+	bool DoingFileMacro() const;										// Or still busy processing a macro file?
+	float FractionOfFilePrinted() const;								// Get fraction of file printed
+	void Diagnostics(MessageType mtype);								// Send helpful information out
 
-    bool RunConfigFile(const char* fileName);							// Start running the config file
-    bool IsDaemonBusy() const;											// Return true if the daemon is busy running config.g or a trigger file
+	bool RunConfigFile(const char* fileName);							// Start running the config file
+	bool IsDaemonBusy() const;											// Return true if the daemon is busy running config.g or a trigger file
 
 	bool GetAxisIsHomed(unsigned int axis) const						// Has the axis been homed?
-    	{ return (axesHomed & (1 << axis)) != 0; }
-    void SetAxisIsHomed(unsigned int axis)								// Tell us that the axis is now homed
-    	{ axesHomed |= (1 << axis); }
-    void SetAxisNotHomed(unsigned int axis)								// Tell us that the axis is not homed
-    	{ axesHomed &= ~(1 << axis); }
+		{ return (axesHomed & (1 << axis)) != 0; }
+	void SetAxisIsHomed(unsigned int axis)								// Tell us that the axis is now homed
+		{ axesHomed |= (1 << axis); }
+	void SetAxisNotHomed(unsigned int axis)								// Tell us that the axis is not homed
+		{ axesHomed &= ~(1 << axis); }
 
-    float GetSpeedFactor() const { return speedFactor * minutesToSeconds; }	// Return the current speed factor
-    float GetExtrusionFactor(size_t extruder) { return extrusionFactors[extruder]; } // Return the current extrusion factors
-    float GetRawExtruderPosition(size_t drive) const;					// Get the actual extruder position, after adjusting the extrusion factor
-    float GetRawExtruderTotalByDrive(size_t extruder) const;			// Get the total extrusion since start of print, for one drive
-    float GetTotalRawExtrusion() const { return rawExtruderTotal; }		// Get the total extrusion since start of print, all drives
+	float GetSpeedFactor() const { return speedFactor * minutesToSeconds; }	// Return the current speed factor
+	float GetExtrusionFactor(size_t extruder) { return extrusionFactors[extruder]; } // Return the current extrusion factors
+	float GetRawExtruderPosition(size_t drive) const;					// Get the actual extruder position, after adjusting the extrusion factor
+	float GetRawExtruderTotalByDrive(size_t extruder) const;			// Get the total extrusion since start of print, for one drive
+	float GetTotalRawExtrusion() const { return rawExtruderTotal; }		// Get the total extrusion since start of print, all drives
 
-	size_t GetGCodeBufferSpace(const WebSource input) const;			// How many bytes are left for a web-based G-code source?
-	void PutGCode(const WebSource source, const char *code);			// Enqueue a null-terminated G-code for a web-based source
+	RegularGCodeInput *GetHTTPInput() const { return httpInput; }
+	RegularGCodeInput *GetTelnetInput() const { return telnetInput; }
 
 	void WriteGCodeToFile(GCodeBuffer& gb);								// Write this GCode into a file
 	void WriteHTMLToFile(GCodeBuffer& gb, char b);						// Save an HTML file (usually to upload a new web interface)
-    
+
 	bool IsFlashing() const { return isFlashing; }						// Is a new firmware binary going to be flashed?
 
 	bool IsPaused() const;
@@ -124,17 +122,17 @@ public:
 	bool IsResuming() const;
 	bool IsRunning() const;
 
-    bool AllAxesAreHomed() const;										// Return true if all axes are homed
+	bool AllAxesAreHomed() const;										// Return true if all axes are homed
 
-	unsigned int GetScheduledMoves() const;								// Get the real number of scheduled moves
-    void CancelPrint();													// Cancel the current print
+	uint32_t GetScheduledMoves() const;									// Get the real number of scheduled moves
+	void CancelPrint();													// Cancel the current print
 
-    void MoveStoppedByZProbe() { zProbeTriggered = true; }				// Called from the step ISR when the Z probe is triggered, causing the move to be aborted
+	void MoveStoppedByZProbe() { zProbeTriggered = true; }				// Called from the step ISR when the Z probe is triggered, causing the move to be aborted
 
-    size_t GetNumAxes() const { return numAxes; }
-    size_t GetNumExtruders() const { return numExtruders; }
+	size_t GetNumAxes() const { return numAxes; }
+	size_t GetNumExtruders() const { return numExtruders; }
 
-    static const char axisLetters[MAX_AXES]; 							// 'X', 'Y', 'Z'
+	static const char axisLetters[MAX_AXES]; 							// 'X', 'Y', 'Z'
 
 private:
 	enum class CannedMoveType : uint8_t { none, relative, absolute };
@@ -228,6 +226,7 @@ private:
 	void ClearHeightMap() const;										// Clear the height map
 
 	bool WriteConfigOverrideFile(StringRef& reply, const char *fileName) const; // Write the config-override file
+	void CopyConfigFinalValues(GCodeBuffer& gb);						// Copy the feed rate etc. from the daemon to the input channels
 
 	static uint32_t LongArrayToBitMap(const long *arr, size_t numEntries);	// Convert an array of longs to a bit map
 
@@ -256,6 +255,7 @@ private:
 	bool active;								// Live and running?
 	bool isPaused;								// true if the print has been paused
 	bool dwellWaiting;							// We are in a dwell
+	bool runningConfigFile;						// We are running config.g during the startup process
 	unsigned int segmentsLeft;					// The number of segments left to do in the current move, or 0 if no move available
 	float dwellTime;							// How long a pause for a dwell (seconds)?
 	RawMove moveBuffer;							// Move details to pass to Move class

@@ -32,9 +32,9 @@ enum class ResponseSource
 };
 
 class RepRap
-{    
+{
 public:
-      
+
     RepRap();
     void EmergencyStop();
     void Init();
@@ -103,7 +103,7 @@ public:
 private:
 
     static void EncodeString(StringRef& response, const char* src, size_t spaceToLeave, bool allowControlChars = false, char prefix = 0);
-  
+
     char GetStatusCharacter() const;
 
     Platform* platform;

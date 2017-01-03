@@ -252,7 +252,7 @@ void Webserver::CancelUpload(HttpSession& session)
 	if (session.fileBeingUploaded.IsLive())
 	{
 		session.fileBeingUploaded.Close();
-		reprap.GetPlatform()->GetMassStorage()->Delete(session.filenameBeingUploaded);
+		//TODO delete the file as well
 	}
 	if (uploadIp == session.ip)
 	{
@@ -624,11 +624,11 @@ bool Webserver::ProcessFirstFragment(HttpSession& session, const char* command, 
 	if (StringEquals(command, "move"))
 	{
 		const char* response =  "{\"err\":1}";		// assume failure
-		const char* oldVal = GetKeyValue("old");
-		const char* newVal = GetKeyValue("new");
+		const char* const oldVal = GetKeyValue("old");
+		const char* const newVal = GetKeyValue("new");
 		if (oldVal != nullptr && newVal != nullptr)
 		{
-			bool success = platform->GetMassStorage()->Rename(oldVal, newVal);
+			const bool success = platform->GetMassStorage()->Rename(oldVal, newVal);
 			if (success)
 			{
 				response =  "{\"err\":0}";
@@ -696,10 +696,11 @@ bool Webserver::ProcessFirstFragment(HttpSession& session, const char* command, 
 		const char* gcodeVal = GetKeyValue("gcode");
 		if (gcodeVal != nullptr)
 		{
-			reprap.GetGCodes()->PutGCode(WebSource::HTTP, gcodeVal);
+			RegularGCodeInput * const httpInput = reprap.GetGCodes()->GetHTTPInput();
+			httpInput->Put(gcodeVal);
 			if (OutputBuffer::Allocate(response))
 			{
-				response->printf("{\"buff\":%u}", reprap.GetGCodes()->GetGCodeBufferSpace(WebSource::HTTP));
+				response->printf("{\"buff\":%u}", httpInput->BufferSpaceLeft());
 			}
 		}
 		else
@@ -719,13 +720,13 @@ bool Webserver::ProcessFirstFragment(HttpSession& session, const char* command, 
 		{
 			dir = platform->GetGCodeDir();
 		}
-		const char* flagDirsVal = GetKeyValue("flagDirs");
-		bool flagDirs = flagDirsVal != nullptr && atoi(flagDirsVal) == 1;
+		const char* const flagDirsVal = GetKeyValue("flagDirs");
+		const bool flagDirs = flagDirsVal != nullptr && atoi(flagDirsVal) == 1;
 		response = reprap.GetFilesResponse(dir, flagDirs);
 	}
 	else if (StringEquals(command, "fileinfo"))
 	{
-		const char* nameVal = GetKeyValue("name");
+		const char* const nameVal = GetKeyValue("name");
 		if (reprap.GetPrintMonitor()->GetFileInfoResponse(nameVal, response))
 		{
 			processingDeferredRequest = false;

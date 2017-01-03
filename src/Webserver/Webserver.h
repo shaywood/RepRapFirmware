@@ -130,14 +130,9 @@ public:
 	void Exit();
 	void Diagnostics(MessageType mtype);
 
-	bool GCodeAvailable(const WebSource source) const;
-	char ReadGCode(const WebSource source);
 	void HandleGCodeReply(const WebSource source, OutputBuffer *reply);
 	void HandleGCodeReply(const WebSource source, const char *reply);
 	uint32_t GetReplySeq() const;
-
-	// Returns the available G-Code buffer space of the HTTP interpreter (may be dropped in a future version)
-	uint16_t GetGCodeBufferSpace(const WebSource source) const;
 
 	void ConnectionLost(Connection conn /*const ConnectionState *cs*/);
 	void ConnectionError();
@@ -161,11 +156,8 @@ protected:
 		bool DoingFastUpload() const override;
 		void DoFastUpload();
 
-		bool GCodeAvailable() const;
-		char ReadGCode();
 		void HandleGCodeReply(OutputBuffer *reply);
 		void HandleGCodeReply(const char *reply);
-		uint16_t GetGCodeBufferSpace() const;
 		uint32_t GetReplySeq() const;
 
 	private:
@@ -199,7 +191,7 @@ protected:
 		void SendFile(const char* nameOfFileToSend, bool isWebFile);
 		void SendGCodeReply();
 		void SendJsonResponse(const char* command);
-		void GetJsonResponse(const char* request, OutputBuffer *&response, const char* key, const char* value, size_t valueLength, bool& keepOpen);
+		void GetJsonResponse(const char* request, OutputBuffer *&response, bool& keepOpen);
 		bool ProcessMessage();
 		bool RejectMessage(const char* s, unsigned int code = 500);
 
@@ -232,15 +224,7 @@ protected:
 		bool IsAuthenticated() const;
 		void UpdateAuthentication();
 		bool RemoveAuthentication();
-
-		// Deal with incoming G-Codes
-
-		char gcodeBuffer[gcodeBufferLength];
-		uint16_t gcodeReadIndex, gcodeWriteIndex;		// head and tail indices into gcodeBuffer
-
-		void LoadGcodeBuffer(const char* gc);
-		void ProcessGcode(const char* gc);
-		void StoreGcodeData(const char* data, uint16_t len);
+		const char* GetKeyValue(const char *key) const;	// return the value of the specified key, or nullptr if not present
 
 		// Responses from GCodes class
 
@@ -317,11 +301,8 @@ protected:
 		bool CharFromClient(const char c) override;
 		void ResetState();
 
-		bool GCodeAvailable() const;
-		char ReadGCode();
 		void HandleGCodeReply(OutputBuffer *reply);
 		void HandleGCodeReply(const char *reply);
-		uint16_t GetGCodeBufferSpace() const;
 
 		void SendGCodeReply();
 
@@ -343,14 +324,6 @@ protected:
 		size_t clientPointer;
 
 		bool ProcessLine();
-
-		// Deal with incoming G-Codes
-
-		char gcodeBuffer[gcodeBufferLength];
-		uint16_t gcodeReadIndex, gcodeWriteIndex;		// head and tail indices into gcodeBuffer
-
-		void ProcessGcode(const char* gc);
-		void StoreGcodeData(const char* data, uint16_t len);
 
 		// Converted response from GCodes class (NL -> CRNL)
 
@@ -375,11 +348,6 @@ inline bool ProtocolInterpreter::IsUploading() const { return uploadState != not
 
 inline uint32_t Webserver::GetReplySeq() const { return httpInterpreter->GetReplySeq(); }
 
-inline uint16_t Webserver::HttpInterpreter::GetGCodeBufferSpace() const { return (gcodeReadIndex - gcodeWriteIndex - 1u) % gcodeBufferLength; }
-inline bool Webserver::HttpInterpreter::GCodeAvailable() const { return gcodeReadIndex != gcodeWriteIndex; }
 inline uint32_t Webserver::HttpInterpreter::GetReplySeq() const { return seq; }
-
-inline uint16_t Webserver::TelnetInterpreter::GetGCodeBufferSpace() const { return (gcodeReadIndex - gcodeWriteIndex - 1u) % gcodeBufferLength; }
-inline bool Webserver::TelnetInterpreter::GCodeAvailable() const { return gcodeReadIndex != gcodeWriteIndex; }
 
 #endif

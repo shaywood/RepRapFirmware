@@ -25,7 +25,6 @@ Licence: GPL
 #include <cstddef>		// for size_t
 #include <cfloat>
 #include <cstdarg>
-#include <ctime>
 
 #include "ecv.h"
 #include "Arduino.h"
@@ -94,6 +93,7 @@ const float minutesToSeconds = 60.0;
 const float secondsToMinutes = 1.0/minutesToSeconds;
 const float SecondsToMillis = 1000.0;
 const float MillisToSeconds = 0.001;
+const float InchToMm = 25.4;
 
 // Type of an offset in a file
 typedef uint32_t FilePosition;

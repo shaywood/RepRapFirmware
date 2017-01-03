@@ -25,6 +25,7 @@
 
 #include "GCodes.h"
 #include "GCodeBuffer.h"
+#include "GCodeQueue.h"
 #include "Heating/Heat.h"
 #include "Platform.h"
 #include "Movement/Move.h"
@@ -55,7 +56,7 @@ void GCodes::RestorePoint::Init()
 	{
 		moveCoords[i] = 0.0;
 	}
-	feedRate = DefaultFeedrate/minutesToSeconds;
+	feedRate = DefaultFeedrate * secondsToMinutes;
 }
 
 GCodes::GCodes(Platform* p, Webserver* w) :
@@ -101,6 +102,7 @@ void GCodes::Init()
 	eofStringCounter = 0;
 	eofStringLength = strlen(eofString);
 	offSetSet = false;
+	runningConfigFile = false;
 	active = true;
 	longWait = platform->Time();
 	dwellTime = longWait;
@@ -144,7 +146,7 @@ void GCodes::Reset()
 	probeCount = 0;
 	cannedCycleMoveCount = 0;
 	cannedCycleMoveQueued = false;
-	speedFactor = 1.0 / minutesToSeconds;				// default is just to convert from mm/minute to mm/second
+	speedFactor = secondsToMinutes;						// default is just to convert from mm/minute to mm/second
 	for (size_t i = 0; i < MaxExtruders; ++i)
 	{
 		extrusionFactors[i] = 1.0;
@@ -197,13 +199,23 @@ float GCodes::FractionOfFilePrinted() const
 // We use triggerCGode as the source to prevent any triggers being executed until we have finished
 bool GCodes::RunConfigFile(const char* fileName)
 {
-	return DoFileMacro(*daemonGCode, fileName, false);
+	runningConfigFile = DoFileMacro(*daemonGCode, fileName, false);
+	return runningConfigFile;
 }
 
 // Return true if the daemon is busy running config.g or a trigger file
 bool GCodes::IsDaemonBusy() const
 {
 	return daemonGCode->MachineState().fileState.IsLive();
+}
+
+// Copy the feed rate etc. from the daemon to the input channels
+void GCodes::CopyConfigFinalValues(GCodeBuffer& gb)
+{
+	for (size_t i = 0; i < ARRAY_SIZE(gcodeSources); ++i)
+	{
+		gcodeSources[i]->MachineState().CopyStateFrom(gb.MachineState());
+	}
 }
 
 void GCodes::Spin()
@@ -346,7 +358,7 @@ void GCodes::Spin()
 				{
 					moveBuffer.coords[drive] = 0.0;
 				}
-				moveBuffer.feedRate = DefaultFeedrate/minutesToSeconds;	// ask for a good feed rate, we may have paused during a slow move
+				moveBuffer.feedRate = DefaultFeedrate * secondsToMinutes;	// ask for a good feed rate, we may have paused during a slow move
 				moveBuffer.moveType = 0;
 				moveBuffer.endStopsToCheck = 0;
 				moveBuffer.usePressureAdvance = false;
@@ -706,7 +718,12 @@ void GCodes::DoFilePrint(GCodeBuffer& gb, StringRef& reply)
 			}
 			else
 			{
-				// Finished a macro
+				// Finished a macro or finished processing config.g
+				if (runningConfigFile)
+				{
+					CopyConfigFinalValues(gb);
+					runningConfigFile = false;
+				}
 				Pop(gb);
 				gb.Init();
 				if (gb.GetState() == GCodeState::normal)
@@ -924,14 +941,17 @@ unsigned int GCodes::LoadMoveBufferFromGCode(GCodeBuffer& gb, int moveType)
 	}
 
 	// Deal with feed rate
-	if (gb.Seen(feedrateLetter))
+	if (moveType >= 0 && gb.Seen(feedrateLetter))
 	{
-		gb.MachineState().feedrate = gb.GetFValue() * distanceScale * speedFactor;
+		const float rate = gb.GetFValue() * distanceScale;
+		gb.MachineState().feedrate = (moveType == 0)
+										? rate * speedFactor
+										: rate * secondsToMinutes;		// don't apply the speed factor to homing and other special moves
 	}
 	moveBuffer.feedRate = gb.MachineState().feedrate;
 
 	// First do extrusion, and check, if we are extruding, that we have a tool to extrude with
-	Tool* tool = reprap.GetCurrentTool();
+	Tool* const tool = reprap.GetCurrentTool();
 	if (gb.Seen(extrudeLetter))
 	{
 		if (tool == nullptr)
@@ -939,7 +959,7 @@ unsigned int GCodes::LoadMoveBufferFromGCode(GCodeBuffer& gb, int moveType)
 			platform->Message(GENERIC_MESSAGE, "Attempting to extrude with no tool selected.\n");
 			return 0;
 		}
-		size_t eMoveCount = tool->DriveCount();
+		const size_t eMoveCount = tool->DriveCount();
 		if (eMoveCount > 0)
 		{
 			// Set the drive values for this tool.
@@ -1433,6 +1453,7 @@ bool GCodes::OffsetAxes(GCodeBuffer& gb)
 		}
 		for (size_t drive = 0; drive < DRIVES; drive++)
 		{
+			cannedMoveType[drive] = CannedMoveType::none;
 			if (drive < numAxes)
 			{
 				record[drive] = moveBuffer.coords[drive];
@@ -1446,12 +1467,11 @@ bool GCodes::OffsetAxes(GCodeBuffer& gb)
 			{
 				record[drive] = 0.0;
 			}
-			cannedMoveType[drive] = CannedMoveType::none;
 		}
 
 		if (gb.Seen(feedrateLetter)) // Has the user specified a feedrate?
 		{
-			cannedFeedRate = gb.GetFValue() * distanceScale * SECONDS_TO_MINUTES;
+			cannedFeedRate = gb.GetFValue() * distanceScale * secondsToMinutes;
 		}
 		else
 		{
@@ -1553,7 +1573,7 @@ bool GCodes::DoSingleZProbeAtPoint(GCodeBuffer& gb, size_t probePointIndex, floa
 {
 	reprap.GetMove()->SetIdentityTransform(); 		// It doesn't matter if these are called repeatedly
 
-	for (size_t drive = 0; drive <= DRIVES; drive++)
+	for (size_t drive = 0; drive < DRIVES; drive++)
 	{
 		cannedMoveType[drive] = CannedMoveType::none;
 	}
@@ -3037,36 +3057,6 @@ float GCodes::GetRawExtruderTotalByDrive(size_t extruder) const
 	return (extruder < numExtruders) ? rawExtruderTotalByDrive[extruder] : 0.0;
 }
 
-// How many bytes are left for a web-based G-code?
-size_t GCodes::GetGCodeBufferSpace(const WebSource input) const
-{
-	switch (input)
-	{
-		case WebSource::HTTP:
-			return httpInput->BufferSpaceLeft();
-
-		case WebSource::Telnet:
-			return telnetInput->BufferSpaceLeft();
-	}
-
-	return 0;
-}
-
-// Enqueue a null-terminated G-code for a web-based input source
-void GCodes::PutGCode(const WebSource source, const char *code)
-{
-	switch (source)
-	{
-		case WebSource::HTTP:
-			httpInput->Put(code);
-			break;
-
-		case WebSource::Telnet:
-			telnetInput->Put(code);
-			break;
-	}
-}
-
 // Cancel the current SD card print.
 // This is called from Pid.cpp when there is a heater fault, and from elsewhere in this module.
 void GCodes::CancelPrint()
@@ -3189,7 +3179,7 @@ void GCodes::ListTriggers(StringRef reply, TriggerMask mask)
 }
 
 // Get the real number of scheduled moves
-unsigned int GCodes::GetScheduledMoves() const
+uint32_t GCodes::GetScheduledMoves() const
 {
 	uint32_t scheduledMoves = reprap.GetMove()->GetScheduledMoves();
 	return scheduledMoves + segmentsLeft;
@@ -3292,7 +3282,8 @@ bool GCodes::WriteConfigOverrideFile(StringRef& reply, const char *fileName) con
 
 // Resource locking/unlocking
 
-// Lock the resource, returning true if success
+// Lock the resource, returning true if success.
+// Locking the same resource more than once only locks it once, there is no lock count held.
 bool GCodes::LockResource(const GCodeBuffer& gb, Resource r)
 {
 	if (resourceOwners[r] == &gb)
@@ -3302,7 +3293,7 @@ bool GCodes::LockResource(const GCodeBuffer& gb, Resource r)
 	if (resourceOwners[r] == nullptr)
 	{
 		resourceOwners[r] = &gb;
-		gb.MachineState().lockedResources |= (1 << r);
+		gb.MachineState().lockedResources |= (1u << r);
 		return true;
 	}
 	return false;
@@ -3345,10 +3336,10 @@ void GCodes::UnlockAll(const GCodeBuffer& gb)
 	const uint32_t resourcesToKeep = (mc == nullptr) ? 0 : mc->lockedResources;
 	for (size_t i = 0; i < NumResources; ++i)
 	{
-		if (resourceOwners[i] == &gb && ((1 << i) & resourcesToKeep) == 0)
+		if (resourceOwners[i] == &gb && ((1u << i) & resourcesToKeep) == 0)
 		{
 			resourceOwners[i] = nullptr;
-			gb.MachineState().lockedResources &= ~(1 << i);
+			gb.MachineState().lockedResources &= ~(1u << i);
 		}
 	}
 }

@@ -21,10 +21,10 @@ GCodeQueue::GCodeQueue() : freeItems(nullptr), queuedItems(nullptr)
 	}
 }
 
-bool GCodeQueue::QueueCode(GCodeBuffer &gb)
+bool GCodeQueue::QueueCode(GCodeBuffer &gb, uint32_t segmentsLeft)
 {
 	// Don't queue anything if no moves are being performed
-	unsigned int scheduledMoves = reprap.GetGCodes()->GetScheduledMoves();
+	uint32_t scheduledMoves = reprap.GetMove()->GetScheduledMoves() + segmentsLeft;
 	if (scheduledMoves == reprap.GetMove()->GetCompletedMoves())
 	{
 		return false;
@@ -146,14 +146,14 @@ bool GCodeQueue::FillBuffer(GCodeBuffer *gb)
 	return true;
 }
 
-void GCodeQueue::PurgeEntries(unsigned int skippedMoves)
+// Because some moves may end before the print is actually paused, we need a method to
+// remove all the entries that will not be executed after the print has finally paused
+void GCodeQueue::PurgeEntries()
 {
-	unsigned int movesToDo = reprap.GetMove()->GetCompletedMoves() - skippedMoves;
-
 	QueuedCode *item = queuedItems, *lastItem = nullptr;
 	while (item != nullptr)
 	{
-		if (item->executeAtMove > movesToDo)
+		if (item->executeAtMove > reprap.GetMove()->GetScheduledMoves())
 		{
 			// Release this item
 			QueuedCode *nextItem = item->Next();
@@ -192,12 +192,13 @@ void GCodeQueue::Clear()
 
 void GCodeQueue::Diagnostics(MessageType mtype)
 {
-	reprap.GetPlatform()->MessageF(mtype, "Internal code queue is %s\n", (queuedItems == nullptr) ? "empty." : "not empty:");
+	reprap.GetPlatform()->MessageF(mtype, "Code queue is %s\n", (queuedItems == nullptr) ? "empty." : "not empty:");
 	if (queuedItems != nullptr)
 	{
 		QueuedCode *item = queuedItems;
 		size_t queueLength = 0;
-		do {
+		do
+		{
 			queueLength++;
 			reprap.GetPlatform()->MessageF(mtype, "Queued '%s' for move %d\n", item->code, item->executeAtMove);
 		} while ((item = item->Next()) != nullptr);

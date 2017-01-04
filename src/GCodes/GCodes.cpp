@@ -127,8 +127,8 @@ void GCodes::Init()
 // This is called from Init and when doing an emergency stop
 void GCodes::Reset()
 {
-	// Here we could reset the input sources as well, but this would mess up M122\nM999,
-	// since both codes are sent at once from the web interface. Hence we don't do this.
+	// Here we could reset the input sources as well, but this would mess up M122\nM999
+	// because both codes are sent at once from the web interface. Hence we don't do this here
 
 	httpGCode->Init();
 	telnetGCode->Init();
@@ -709,6 +709,7 @@ void GCodes::DoFilePrint(GCodeBuffer& gb, StringRef& reply)
 			if (gb.MachineState().previous == nullptr)
 			{
 				// Finished printing SD card file
+				UnlockAll(gb);
 				reprap.GetPrintMonitor()->StoppedPrint();
 				if (platform->Emulating() == marlin)
 				{
@@ -821,9 +822,8 @@ void GCodes::DoPause(GCodeBuffer& gb)
 	else
 	{
 		// Pausing a file print via another input source
-		uint32_t skippedMoves;
 		pauseRestorePoint.feedRate = fileGCode->MachineState().feedrate;			// the call to PausePrint may or may not change this
-		FilePosition fPos = reprap.GetMove()->PausePrint(pauseRestorePoint.moveCoords, pauseRestorePoint.feedRate, reprap.GetCurrentXAxes(), skippedMoves);	// tell Move we wish to pause the current print
+		FilePosition fPos = reprap.GetMove()->PausePrint(pauseRestorePoint.moveCoords, pauseRestorePoint.feedRate, reprap.GetCurrentXAxes());	// tell Move we wish to pause the current print
 
 		FileData& fdata = fileGCode->MachineState().fileState;
 		if (fPos != noFilePosition && fdata.IsLive())
@@ -831,7 +831,7 @@ void GCodes::DoPause(GCodeBuffer& gb)
 			fdata.Seek(fPos);														// replay the abandoned instructions if/when we resume
 		}
 		fileInput->Reset();
-		codeQueue->PurgeEntries(skippedMoves);
+		codeQueue->PurgeEntries();
 
 		if (segmentsLeft != 0)
 		{
@@ -875,6 +875,8 @@ void GCodes::Diagnostics(MessageType mtype)
 	{
 		gcodeSources[i]->Diagnostics(mtype);
 	}
+
+	codeQueue->Diagnostics(mtype);
 }
 
 // Lock movement and wait for pending moves to finish.
@@ -3176,13 +3178,6 @@ void GCodes::ListTriggers(StringRef reply, TriggerMask mask)
 			}
 		}
 	}
-}
-
-// Get the real number of scheduled moves
-uint32_t GCodes::GetScheduledMoves() const
-{
-	uint32_t scheduledMoves = reprap.GetMove()->GetScheduledMoves();
-	return scheduledMoves + segmentsLeft;
 }
 
 // M38 (SHA1 hash of a file) implementation:

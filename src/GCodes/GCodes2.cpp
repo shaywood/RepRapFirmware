@@ -46,7 +46,7 @@ bool GCodes::ActOnCode(GCodeBuffer& gb, StringRef& reply)
 	}
 
 	// Can we queue this code?
-	if (&gb == queuedGCode || DoingFileMacro() || !codeQueue->QueueCode(gb))
+	if (&gb == queuedGCode || DoingFileMacro() || !codeQueue->QueueCode(gb, segmentsLeft))
 	{
 		// M-code parameters might contain letters T and G, e.g. in filenames.
 		// dc42 assumes that G-and T-code parameters never contain the letter M.

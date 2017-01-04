@@ -302,7 +302,7 @@ void Move::Spin()
 // Returns the file position of the first queue move we are going to skip, or noFilePosition we we are not skipping any moves.
 // We update 'positions' to the positions and feed rate expected for the next move, and the amount of extrusion in the moves we skipped.
 // If we are not skipping any moves then the feed rate is left alone, therefore the caller should set this up first.
-FilePosition Move::PausePrint(float positions[DRIVES], float& pausedFeedRate, uint32_t xAxes, uint32_t &skippedMoves)
+FilePosition Move::PausePrint(float positions[DRIVES], float& pausedFeedRate, uint32_t xAxes)
 {
 	// Find a move we can pause after.
 	// Ideally, we would adjust a move if necessary and possible so that we can pause after it, but for now we don't do that.
@@ -310,9 +310,6 @@ FilePosition Move::PausePrint(float positions[DRIVES], float& pausedFeedRate, ui
 	// 1. There are no moves in the queue.
 	// 2. There is a currently-executing move, and possibly some more in the queue.
 	// 3. There are moves in the queue, but we haven't started executing them yet. Unlikely, but possible.
-
-	// Assume no moves need to be skipped
-	skippedMoves = 0;
 
 	// First, see if there is a currently-executing move, and if so, whether we can safely pause at the end of it
 	const DDA *savedDdaRingAddPointer = ddaRingAddPointer;
@@ -383,7 +380,7 @@ FilePosition Move::PausePrint(float positions[DRIVES], float& pausedFeedRate, ui
 			(void)dda->Free();
 			dda = dda->GetNext();
 
-			skippedMoves++;
+			scheduledMoves--;
 		}
 		while (dda != savedDdaRingAddPointer);
 	}

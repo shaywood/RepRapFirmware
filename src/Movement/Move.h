@@ -109,7 +109,7 @@ public:
     float GetSimulationTime() const { return simulationTime; }						// Get the accumulated simulation time
     void PrintCurrentDda() const;													// For debugging
 
-    FilePosition PausePrint(float positions[DRIVES], float& pausedFeedRate, uint32_t xAxes, uint32_t &skippedMoves);	// Pause the print as soon as we can and return the number of skipped moves
+    FilePosition PausePrint(float positions[DRIVES], float& pausedFeedRate, uint32_t xAxes); // Pause the print as soon as we can
     bool NoLiveMovement() const;													// Is a move running, or are there any queued?
 
     int DoDeltaProbe(float frequency, float amplitude, float rate, float distance);

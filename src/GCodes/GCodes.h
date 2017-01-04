@@ -124,7 +124,6 @@ public:
 
 	bool AllAxesAreHomed() const;										// Return true if all axes are homed
 
-	uint32_t GetScheduledMoves() const;									// Get the real number of scheduled moves
 	void CancelPrint();													// Cancel the current print
 
 	void MoveStoppedByZProbe() { zProbeTriggered = true; }				// Called from the step ISR when the Z probe is triggered, causing the move to be aborted

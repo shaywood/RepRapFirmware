@@ -32,16 +32,25 @@ void GCodeBuffer::Diagnostics(MessageType mtype)
 	switch (bufferState)
 	{
 		case GCodeBufferState::idle:
-			reprap.GetPlatform()->MessageF(mtype, "%s is idle\n", identity);
+			reprap.GetPlatform()->MessageF(mtype, "%s is idle", identity);
 			break;
 
 		case GCodeBufferState::ready:
-			reprap.GetPlatform()->MessageF(mtype, "%s is ready with \"%s\"\n", identity, Buffer());
+			reprap.GetPlatform()->MessageF(mtype, "%s is ready with \"%s\"", identity, Buffer());
 			break;
 
 		case GCodeBufferState::executing:
-			reprap.GetPlatform()->MessageF(mtype, "%s is doing \"%s\"\n", identity, Buffer());
+			reprap.GetPlatform()->MessageF(mtype, "%s is doing \"%s\"", identity, Buffer());
 	}
+
+	reprap.GetPlatform()->Message(mtype, " (states ");
+	const GCodeMachineState *ms = machineState;
+	do
+	{
+		reprap.GetPlatform()->MessageF(mtype, "%d%s", ms->state, (ms->previous == nullptr) ? ")\n" : ", ");
+		ms = ms->previous;
+	}
+	while (ms != nullptr);
 }
 
 int GCodeBuffer::CheckSum() const

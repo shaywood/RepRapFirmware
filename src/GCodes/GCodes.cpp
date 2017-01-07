@@ -158,6 +158,7 @@ void GCodes::Reset()
 	moveBuffer.xAxes = DefaultXAxisMapping;
 
 	pauseRestorePoint.Init();
+	changingTool = false;
 	toolChangeRestorePoint.Init();
 
 	ClearMove();
@@ -295,7 +296,7 @@ void GCodes::Spin()
 				}
 			}
 			gb.AdvanceState();
-			if (reprap.GetTool(newToolNumber) != nullptr && AllAxesAreHomed())
+			if (reprap.GetTool(newToolNumber) != nullptr && AllAxesAreHomed() && (toolChangeParam & TPreBit) != 0)
 			{
 				scratchString.printf("tpre%d.g", newToolNumber);
 				DoFileMacro(gb, scratchString.Pointer(), false);
@@ -306,7 +307,7 @@ void GCodes::Spin()
 		case GCodeState::m109ToolChange2: // Select the new tool (even if it doesn't exist - that just deselects all tools)
 			reprap.SelectTool(newToolNumber);
 			gb.AdvanceState();
-			if (reprap.GetTool(newToolNumber) != nullptr && AllAxesAreHomed())
+			if (reprap.GetTool(newToolNumber) != nullptr && AllAxesAreHomed() && (toolChangeParam & TPostBit) != 0)
 			{
 				scratchString.printf("tpost%d.g", newToolNumber);
 				DoFileMacro(gb, scratchString.Pointer(), false);
@@ -314,13 +315,14 @@ void GCodes::Spin()
 			break;
 
 		case GCodeState::toolChangeComplete:
+			changingTool = false;
 			gb.SetState(GCodeState::normal);
 			break;
 
 		case GCodeState::m109ToolChangeComplete:
 			if (cancelWait || ToolHeatersAtSetTemperatures(reprap.GetCurrentTool(), gb.MachineState().waitWhileCooling))
 			{
-				cancelWait = isWaiting = false;
+				cancelWait = isWaiting = changingTool = false;
 				gb.SetState(GCodeState::normal);
 			}
 			// In Marlin emulation mode we should return some sort of (undocumented) message here every second...
@@ -628,7 +630,7 @@ void GCodes::Spin()
 // Start a new gcode, or continue to execute one that has already been started:
 void GCodes::StartNextGCode(GCodeBuffer& gb, StringRef& reply)
 {
-	if (isPaused && &gb == fileGCode)
+	if (IsPaused() && &gb == fileGCode)
 	{
 		// We are paused, so don't process any more gcodes from the file being printed.
 		// There is a potential issue here if fileGCode holds any locks, so unlock everything.
@@ -1422,7 +1424,8 @@ bool GCodes::SetPositions(GCodeBuffer& gb)
 			return false;
 		}
 
-		if (LoadMoveBufferFromGCode(gb, -1))
+		const bool ok = LoadMoveBufferFromGCode(gb, -1);
+		if (ok && includingAxes)
 		{
 #if SUPPORT_ROLAND
 			if (reprap.GetRoland()->Active())
@@ -2993,9 +2996,12 @@ void GCodes::SetToolHeaters(Tool *tool, float temperature)
 // Begin the tool change sequence
 void GCodes::StartToolChange(GCodeBuffer& gb, bool inM109)
 {
-	gb.SetState((inM109) ? GCodeState:: m109ToolChange1 : GCodeState::toolChange1);
+	changingTool = true;
+	toolChangeParam = (!inM109 && gb.Seen('P')) ? gb.GetIValue() : DefaultToolchangeParam;
+	gb.SetState((inM109) ? GCodeState::m109ToolChange1 : GCodeState::toolChange1);
+
 	const Tool * const oldTool = reprap.GetCurrentTool();
-	if (oldTool != nullptr && AllAxesAreHomed())
+	if (oldTool != nullptr && AllAxesAreHomed() && (toolChangeParam & TFreeBit) != 0)
 	{
 		scratchString.printf("tfree%d.g", oldTool->Number());
 		DoFileMacro(gb, scratchString.Pointer(), false);

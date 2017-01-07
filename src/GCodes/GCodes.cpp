@@ -511,6 +511,7 @@ void GCodes::Spin()
 				}
 
 				zProbeTriggered = false;
+				platform->SetProbing(true);
 				moveBuffer.moveType = 0;
 				moveBuffer.endStopsToCheck = ZProbeActive;
 				moveBuffer.usePressureAdvance = false;
@@ -526,6 +527,7 @@ void GCodes::Spin()
 		case GCodeState::gridProbing3:	// ready to lift the probe after probing the current grid probe point
 			if (LockMovementAndWaitForStandstill(gb))
 			{
+				platform->SetProbing(false);
 				if (!zProbeTriggered)
 				{
 					reply.copy("Z probe was not triggered during probing move");
@@ -1379,6 +1381,10 @@ bool GCodes::DoCannedCycleMove(GCodeBuffer& gb, EndstopChecks ce)
 		moveBuffer.usePressureAdvance = false;
 		segmentsLeft = 1;
 		cannedCycleMoveQueued = true;
+		if ((ce & ZProbeActive) != 0)
+		{
+			platform->SetProbing(true);
+		}
 	}
 	return false;
 }
@@ -1742,6 +1748,7 @@ int GCodes::DoZProbe(GCodeBuffer& gb, float distance)
 
 		if (DoCannedCycleMove(gb, ZProbeActive))
 		{
+			platform->SetProbing(false);
 			return (zProbeTriggered) ? 2 : 1;
 		}
 		return -1;

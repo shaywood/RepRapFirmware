@@ -5,6 +5,7 @@
  ****************************************************************************************************/
 
 #include "Network.h"
+
 #include "Platform.h"
 #include "RepRap.h"
 #include "TransactionBuffer.h"

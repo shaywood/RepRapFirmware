@@ -122,7 +122,7 @@ void RegularGCodeInput::Put(const char c)
 		return;
 	}
 
-	// Check for M112 (emergency stop) while receiving new characters
+	// Check for M112 (emergency stop) and for M122 (diagnostics) while receiving new characters
 	switch (state)
 	{
 		case GCodeInputState::idle:
@@ -153,10 +153,20 @@ void RegularGCodeInput::Put(const char c)
 			break;
 
 		case GCodeInputState::doingMCode:
+			if (c == '1')
+			{
+				state = GCodeInputState::doingMCode1;
+			}
+			break;
+
 		case GCodeInputState::doingMCode1:
 			if (c == '1')
 			{
-				state = (state == GCodeInputState::doingMCode) ? GCodeInputState::doingMCode1 : GCodeInputState::doingMCode11;
+				state = GCodeInputState::doingMCode11;
+			}
+			else if (c == '2')
+			{
+				state = GCodeInputState::doingMCode12;
 			}
 			else
 			{
@@ -168,6 +178,15 @@ void RegularGCodeInput::Put(const char c)
 			if (c == '2')
 			{
 				state = GCodeInputState::doingMCode112;
+				break;
+			}
+			state = GCodeInputState::doingCode;
+			break;
+
+		case GCodeInputState::doingMCode12:
+			if (c == '2')
+			{
+				state = GCodeInputState::doingMCode122;
 				break;
 			}
 			state = GCodeInputState::doingCode;
@@ -186,6 +205,18 @@ void RegularGCodeInput::Put(const char c)
 			}
 
 			state = GCodeInputState::doingCode;
+			break;
+
+		case GCodeInputState::doingMCode122:
+			if (c <= ' ' || c == ';')
+			{
+				// Diagnostics requested - report them now
+				reprap.Diagnostics(GENERIC_MESSAGE);
+
+				// But don't report them twice
+				Reset();
+				return;
+			}
 			break;
 	}
 

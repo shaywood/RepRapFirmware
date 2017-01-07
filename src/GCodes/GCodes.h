@@ -58,6 +58,12 @@ struct Trigger
 	}
 };
 
+// Bits for T-code P-parameter to specify which macros are supposted to be run
+const int TFreeBit = 1 << 0;
+const int TPreBit = 1 << 1;
+const int TPostBit = 1 << 2;
+const int DefaultToolchangeParam = TFreeBit | TPreBit | TPostBit;
+
 //****************************************************************************************************
 
 // The GCode interpreter
@@ -121,6 +127,7 @@ public:
 	bool IsPausing() const;
 	bool IsResuming() const;
 	bool IsRunning() const;
+	bool IsChangingTool() const { return changingTool; }
 
 	bool AllAxesAreHomed() const;										// Return true if all axes are homed
 
@@ -276,7 +283,9 @@ private:
 	FileData fileToPrint;
 	FileStore* fileBeingWritten;				// A file to write G Codes (or sometimes HTML) to
 	uint16_t toBeHomed;							// Bitmap of axes still to be homed
+	bool changingTool;							// Is a tool being changed?
 	int oldToolNumber, newToolNumber;			// Tools being changed
+	int toolChangeParam;						// Bitmap of all the macros to be run during a tool change
 	const char* eofString;						// What's at the end of an HTML file?
 	uint8_t eofStringCounter;					// Check the...
 	uint8_t eofStringLength;					// ... EoF string as we read.

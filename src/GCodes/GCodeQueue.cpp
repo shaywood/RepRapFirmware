@@ -63,13 +63,6 @@ bool GCodeQueue::QueueCode(GCodeBuffer &gb, uint32_t segmentsLeft)
 
 		// Valve control
 		queueCode |= (code == 126 || code == 127);
-
-		// Set networking parameters, Emulation, Compensation, Z-Probe changes
-		// File Uploads, Tool management
-		queueCode |= (code == 540 || (code >= 550 && code <= 563));
-
-		// Move, heater and auxiliary PWM control
-		queueCode |= (code >= 566 && code <= 573);
 	}
 
 	// Does it make sense to queue this code?

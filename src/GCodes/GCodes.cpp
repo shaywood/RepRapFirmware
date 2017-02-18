@@ -3229,7 +3229,7 @@ bool GCodes::AdvanceHash(StringRef &reply)
 			SHA1Result(&hash);
 			for(size_t i = 0; i < 5; i++)
 			{
-				reply.catf("%x", hash.Message_Digest[i]);
+				reply.catf("%0.8x", hash.Message_Digest[i]);
 			}
 
 			// Clean up again

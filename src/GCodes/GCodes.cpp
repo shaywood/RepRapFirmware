@@ -2987,11 +2987,23 @@ void GCodes::SetHeaterParameters(GCodeBuffer& gb, StringRef& reply)
 				seen = true;
 			}
 
+            if (gb.Seen('I'))
+            {
+                const int32_t val = gb.GetIValue();
+
+                const bool heaterInverted = (val != 0);
+                
+                reprap.GetHeat()->SetHeatOn(heater, heaterInverted);
+                seen = true;
+            }
+
 			if (!seen)
 			{
-				reply.printf("T:%.1f B:%.1f C:%.2e R:%.1f L:%d H:%d X:%d",
+				reply.printf("T:%.1f B:%.1f C:%.2e R:%.1f L:%d H:%d X:%d I:%d",
 						th.GetR25(), th.GetBeta(), th.GetShc(), th.GetSeriesR(),
-						th.GetLowOffset(), th.GetHighOffset(), platform->GetThermistorNumber(heater));
+						th.GetLowOffset(), th.GetHighOffset(), 
+						platform->GetThermistorNumber(heater),
+						reprap.GetHeat()->GetHeatOn(heater));
 			}
 		}
 		else

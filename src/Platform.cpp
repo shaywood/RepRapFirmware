@@ -396,6 +396,7 @@ void Platform::Init()
 	{
 		if (heatOnPins[heater] != NoPin)
 		{
+		    // Don't respect software heater inversion just yet - just initialise based on platform defaults
 			pinMode(heatOnPins[heater], (HEAT_ON) ? OUTPUT_LOW : OUTPUT_HIGH);
 		}
 		AnalogChannelNumber chan = PinToAdcChannel(tempSensePins[heater]);	// translate the Arduino Due Analog pin number to the SAM ADC channel number
@@ -1670,7 +1671,9 @@ void Platform::SetHeater(size_t heater, float power)
 	if (heatOnPins[heater] != NoPin)
 	{
 		uint16_t freq = (reprap.GetHeat()->UseSlowPwm(heater)) ? SlowHeaterPwmFreq : NormalHeaterPwmFreq;
-		WriteAnalog(heatOnPins[heater], (HEAT_ON) ? power : 1.0 - power, freq);
+		float heaterPower = (reprap.GetHeat()->GetHeatOn(heater)) ? power : 1.0 - power;
+		
+		WriteAnalog(heatOnPins[heater], heaterPower, freq);
 	}
 }
 

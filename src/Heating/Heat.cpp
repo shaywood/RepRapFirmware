@@ -25,9 +25,17 @@ Licence: GPL
 Heat::Heat(Platform* p)
 	: platform(p), active(false), coldExtrude(false), bedHeater(DefaultBedHeater), chamberHeater(DefaultChamberHeater), heaterBeingTuned(-1), lastHeaterTuned(-1)
 {
+    // For safety, ensure the array is initialised with 0s
+	for (size_t i = 0; i < HEATER_INVERSION_CONTROL_BYTES; i++)
+	{
+	    heaterOn[i] = 0;
+    }
+	
 	for (size_t heater = 0; heater < HEATERS; heater++)
 	{
 		pids[heater] = new PID(platform, heater);
+		
+		SetHeatOn(heater, HEAT_ON);
 	}
 }
 

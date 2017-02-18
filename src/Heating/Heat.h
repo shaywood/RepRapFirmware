@@ -29,6 +29,11 @@ Licence: GPL
 #include "Pid.h"
 #include "MessageType.h"
 
+// Macro to divide rounding up, courtesy of the GCC documentation site:
+#define ceil_div(x, y) (((x) + (y) - 1) / (y))
+// How many 8-bit integers do we need to record 1 bit per heater?
+#define HEATER_INVERSION_CONTROL_BYTES (ceil_div(HEATERS, 8))
+
 class Heat
 {
 public:
@@ -110,10 +115,17 @@ public:
 	pre(heater < HEATERS);
 
 	bool WriteModelParameters(FileStore *f) const;				// Write heater model parameters to file returning true if no error
+	
+	bool GetHeatOn(size_t heater);
+	
+	void SetHeatOn(size_t heater, bool heatOn);
 
 private:
 	Platform* platform;											// The instance of the RepRap hardware class
 	PID* pids[HEATERS];											// A PID controller for each heater
+
+    uint8_t heaterOn[HEATER_INVERSION_CONTROL_BYTES];           // HEAT_ON for any particular heater is given by (heaterOn[heater / 8] & (1 << (heater % 8)) > 0)
+                                                                // See also Get|SetHeatOn(...)
 
 	uint32_t lastTime;											// The last time our Spin() was called
 	float longWait;												// Long time for things that happen occasionally
@@ -185,5 +197,30 @@ inline void Heat::SetHeaterProtection(size_t heater, float maxTempExcursion, flo
 {
 	pids[heater]->SetHeaterProtection(maxTempExcursion, maxFaultTime);
 }
+
+inline bool Heat::GetHeatOn(size_t heater)
+{
+    const size_t arrayIndex = heater / 8;
+    const size_t bitIndex = heater % 8;
+
+    return (heaterOn[arrayIndex] & (1 << bitIndex)) > 0;
+}
+
+inline void Heat::SetHeatOn(size_t heater, bool heatOn)
+{
+    const size_t arrayIndex = heater / 8;
+    const size_t bitIndex = heater % 8;
+    
+    const uint8_t mask = 1 << bitIndex;
+    
+    if (heatOn)
+    {
+        heaterOn[arrayIndex] |= mask;
+    } 
+    else
+    {
+        heaterOn[arrayIndex] &= ~mask;
+    }
+}   
 
 #endif

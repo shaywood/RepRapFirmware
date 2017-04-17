@@ -8,7 +8,6 @@
 #include "Scanner.h"
 #include "PrintMonitor.h"
 #include "Tool.h"
-#include "Webserver.h"
 
 #ifndef __RADDS__
 # include "sam/drivers/hsmci/hsmci.h"
@@ -34,8 +33,7 @@ RepRap::RepRap() : toolList(nullptr), currentTool(nullptr), lastWarningMillis(0)
 	OutputBuffer::Init();
 	platform = new Platform();
 	network = new Network(platform);
-	webserver = new Webserver(platform, network);
-	gCodes = new GCodes(platform, webserver);
+	gCodes = new GCodes(platform);
 	move = new Move(platform, gCodes);
 	heat = new Heat(platform);
 
@@ -59,7 +57,6 @@ void RepRap::Init()
 	platform->Init();
 	gCodes->Init();
 	network->Init();
-	webserver->Init();
 	move->Init();
 	heat->Init();
 #if SUPPORT_ROLAND
@@ -104,10 +101,6 @@ void RepRap::Init()
 
 	// Enable network (unless it's disabled)
 	network->Activate();			// Need to do this here, as the configuration GCodes may set IP address etc.
-	if (!network->IsEnabled())
-	{
-		platform->Message(HOST_MESSAGE, "Network disabled.\n");
-	}
 
 #ifndef __RADDS__
 	hsmci_set_idle_func(hsmciIdle);
@@ -127,7 +120,6 @@ void RepRap::Exit()
 #if SUPPORT_SCANNER
 	scanner->Exit();
 #endif
-	webserver->Exit();
 	network->Exit();
 	platform->Message(GENERIC_MESSAGE, "RepRap class exited.\n");
 	platform->Exit();
@@ -148,7 +140,6 @@ void RepRap::Spin()
 
 	spinningModule = moduleWebserver;
 	ticksInSpinState = 0;
-	webserver->Spin();
 
 	spinningModule = moduleGcodes;
 	ticksInSpinState = 0;
@@ -225,7 +216,6 @@ void RepRap::Diagnostics(MessageType mtype)
 	heat->Diagnostics(mtype);
 	gCodes->Diagnostics(mtype);
 	network->Diagnostics(mtype);
-	webserver->Diagnostics(mtype);
 }
 
 // Turn off the heaters, disable the motors, and deactivate the Heat and Move classes. Leave everything else working.
@@ -647,13 +637,10 @@ OutputBuffer *RepRap::GetStatusResponse(uint8_t type, ResponseSource source)
 		response->catf(",\"babystep\":%.03f}", gCodes->GetBabyStepOffset());
 	}
 
-	// G-code reply sequence for webserver (seqence number for AUX is handled later)
+	// G-code reply sequence for webserver (sequence number for AUX is handled later)
 	if (source == ResponseSource::HTTP)
 	{
-		response->catf(",\"seq\":%d", webserver->GetReplySeq());
-
-		// There currently appears to be no need for this one, so skip it
-		//response->catf(",\"buff\":%u", webserver->GetGCodeBufferSpace(WebSource::HTTP));
+		response->catf(",\"seq\":%d", network->GetHttpReplySeq());
 	}
 
 	/* Sensors */

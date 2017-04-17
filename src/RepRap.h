@@ -77,7 +77,6 @@ public:
     Heat* GetHeat() const;
     GCodes* GetGCodes() const;
     Network* GetNetwork() const;
-    Webserver* GetWebserver() const;
 	Roland* GetRoland() const;
 	Scanner* GetScanner() const;
     PrintMonitor* GetPrintMonitor() const;
@@ -113,7 +112,6 @@ private:
     Move* move;
     Heat* heat;
     GCodes* gCodes;
-    Webserver* webserver;
 	Roland* roland;
 	Scanner* scanner;
     PrintMonitor* printMonitor;
@@ -148,7 +146,6 @@ inline Move* RepRap::GetMove() const { return move; }
 inline Heat* RepRap::GetHeat() const { return heat; }
 inline GCodes* RepRap::GetGCodes() const { return gCodes; }
 inline Network* RepRap::GetNetwork() const { return network; }
-inline Webserver* RepRap::GetWebserver() const { return webserver; }
 inline Roland* RepRap::GetRoland() const { return roland; }
 inline Scanner* RepRap::GetScanner() const { return scanner; }
 inline PrintMonitor* RepRap::GetPrintMonitor() const { return printMonitor; }

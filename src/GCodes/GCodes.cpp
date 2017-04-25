@@ -38,8 +38,6 @@
 #include "FirmwareUpdater.h"
 #endif
 
-#define DEGREE_SYMBOL	"\xC2\xB0"				// degree-symbol encoding in UTF8
-
 const char GCodes::axisLetters[MAX_AXES] = { 'X', 'Y', 'Z', 'U', 'V', 'W' };
 
 const char* PAUSE_G = "pause.g";
@@ -117,9 +115,9 @@ void GCodes::Init()
 	SetAllAxesNotHomed();
 	for (size_t i = 0; i < NUM_FANS; ++i)
 	{
-		pausedFanValues[i] = 0.0;
+		pausedFanSpeeds[i] = 0.0;
 	}
-	lastDefaultFanSpeed = 0.0;
+	lastDefaultFanSpeed = pausedDefaultFanSpeed = 0.0;
 
 	retractLength = DefaultRetractLength;
 	retractExtra = 0.0;
@@ -304,6 +302,7 @@ void GCodes::Spin()
 		case GCodeState::toolChange0: 		// Run tfree for the old tool (if any)
 		case GCodeState::m109ToolChange0:	// Run tfree for the old tool (if any)
 			doingToolChange = true;
+			SaveFanSpeeds();
 			gb.AdvanceState();
 			if ((toolChangeParam & TFreeBit) != 0)
 			{
@@ -420,7 +419,7 @@ void GCodes::Spin()
 			{
 				for (size_t i = 0; i < NUM_FANS; ++i)
 				{
-					platform->SetFanValue(i, pausedFanValues[i]);
+					platform->SetFanValue(i, pausedFanSpeeds[i]);
 				}
 				for (size_t drive = numAxes; drive < DRIVES; ++drive)
 				{
@@ -638,6 +637,59 @@ void GCodes::Spin()
 				{
 					gb.SetState(GCodeState::gridProbing1);
 				}
+			}
+			break;
+
+		case GCodeState::doingFirmwareRetraction:
+			// We just did the retraction part of a firmware retraction, now we need to do the Z hop
+			if (segmentsLeft == 0)
+			{
+				const uint32_t xAxes = reprap.GetCurrentXAxes();
+				reprap.GetMove()->GetCurrentUserPosition(moveBuffer.coords, 0, xAxes);
+				for (size_t i = numAxes; i < DRIVES; ++i)
+				{
+					moveBuffer.coords[i] = 0.0;
+				}
+				moveBuffer.feedRate = platform->MaxFeedrate(Z_AXIS);
+				moveBuffer.coords[Z_AXIS] += retractHop;
+				moveBuffer.moveType = 0;
+				moveBuffer.isFirmwareRetraction = true;
+				moveBuffer.usePressureAdvance = false;
+				moveBuffer.filePos = (&gb == fileGCode) ? gb.MachineState().fileState.GetPosition() - fileInput->BytesCached() : noFilePosition;
+				moveBuffer.canPauseAfter = false;			// don't pause after a retraction because that could cause too much retraction
+				moveBuffer.xAxes = xAxes;
+				segmentsLeft = 1;
+				gb.SetState(GCodeState::normal);
+			}
+			break;
+
+		case GCodeState::doingFirmwareUnRetraction:
+			// We just undid the Z-hop part of a firmware un-retraction, now we need to do the un-retract
+			if (segmentsLeft == 0)
+			{
+				const Tool * const tool = reprap.GetCurrentTool();
+				if (tool != nullptr)
+				{
+					const uint32_t xAxes = reprap.GetCurrentXAxes();
+					reprap.GetMove()->GetCurrentUserPosition(moveBuffer.coords, 0, xAxes);
+					for (size_t i = numAxes; i < DRIVES; ++i)
+					{
+						moveBuffer.coords[i] = 0.0;
+					}
+					for (size_t i = 0; i < tool->DriveCount(); ++i)
+					{
+						moveBuffer.coords[numAxes + tool->Drive(i)] = retractLength + retractExtra;
+					}
+					moveBuffer.feedRate = unRetractSpeed;
+					moveBuffer.moveType = 0;
+					moveBuffer.isFirmwareRetraction = true;
+					moveBuffer.usePressureAdvance = false;
+					moveBuffer.filePos = (&gb == fileGCode) ? gb.MachineState().fileState.GetPosition() - fileInput->BytesCached() : noFilePosition;
+					moveBuffer.canPauseAfter = true;
+					moveBuffer.xAxes = xAxes;
+					segmentsLeft = 1;
+				}
+				gb.SetState(GCodeState::normal);
 			}
 			break;
 
@@ -919,10 +971,7 @@ void GCodes::DoPause(GCodeBuffer& gb)
 		}
 	}
 
-	for (size_t i = 0; i < NUM_FANS; ++i)
-	{
-		pausedFanValues[i] = platform->GetFanValue(i);
-	}
+	SaveFanSpeeds();
 	gb.SetState(GCodeState::pausing1);
 	isPaused = true;
 }
@@ -2868,6 +2917,16 @@ void GCodes::SetMappedFanSpeed()
 	}
 }
 
+// Save the speeds of all fans
+void GCodes::SaveFanSpeeds()
+{
+	for (size_t i = 0; i < NUM_FANS; ++i)
+	{
+		pausedFanSpeeds[i] = platform->GetFanValue(i);
+	}
+	pausedDefaultFanSpeed = lastDefaultFanSpeed;
+}
+
 // Handle sending a reply back to the appropriate interface(s).
 // Note that 'reply' may be empty. If it isn't, then we need to append newline when sending it.
 // Also, gb may be null if we were executing a trigger macro.
@@ -3186,44 +3245,101 @@ bool GCodes::RetractFilament(GCodeBuffer& gb, bool retract)
 {
 	if (retract != isRetracted && (retractLength != 0.0 || retractHop != 0.0 || (!retract && retractExtra != 0.0)))
 	{
-		const Tool * const tool = reprap.GetCurrentTool();
-		if (tool != nullptr)
+		if (segmentsLeft != 0)
 		{
-			const size_t nDrives = tool->DriveCount();
-			if (nDrives != 0)
+			return false;
+		}
+#if 1
+		// New code does the retraction and the Z hop as separate moves
+
+		// Get ready to generate a move
+		const uint32_t xAxes = reprap.GetCurrentXAxes();
+		reprap.GetMove()->GetCurrentUserPosition(moveBuffer.coords, 0, xAxes);
+		for (size_t i = numAxes; i < DRIVES; ++i)
+		{
+			moveBuffer.coords[i] = 0.0;
+		}
+		moveBuffer.moveType = 0;
+		moveBuffer.isFirmwareRetraction = true;
+		moveBuffer.usePressureAdvance = false;
+		moveBuffer.filePos = (&gb == fileGCode) ? gb.MachineState().fileState.GetPosition() - fileInput->BytesCached() : noFilePosition;
+		moveBuffer.xAxes = xAxes;
+
+		if (retract)
+		{
+			// Set up the retract move
+			const Tool * const tool = reprap.GetCurrentTool();
+			if (tool != nullptr)
 			{
-				if (segmentsLeft != 0)
+				for (size_t i = 0; i < tool->DriveCount(); ++i)
 				{
-					return false;
+					moveBuffer.coords[numAxes + tool->Drive(i)] = retractLength;
 				}
-
-				const uint32_t xAxes = reprap.GetCurrentXAxes();
-				reprap.GetMove()->GetCurrentUserPosition(moveBuffer.coords, 0, xAxes);
-				for (size_t i = numAxes; i < DRIVES; ++i)
+				moveBuffer.feedRate = retractSpeed;
+				moveBuffer.canPauseAfter = false;			// don't pause after a retraction because that could cause too much retraction
+				segmentsLeft = 1;
+			}
+			if (retractHop > 0.0)
+			{
+				gb.SetState(GCodeState::doingFirmwareRetraction);
+			}
+		}
+		else if (retractHop > 0.0)
+		{
+			// Set up the reverse Z hop move
+			moveBuffer.feedRate = platform->MaxFeedrate(Z_AXIS);
+			moveBuffer.coords[Z_AXIS] -= retractHop;
+			moveBuffer.canPauseAfter = false;			// don't pause in the middle of a command
+			segmentsLeft = 1;
+			gb.SetState(GCodeState::doingFirmwareUnRetraction);
+		}
+		else
+		{
+			// No retract hop, so just un-retract
+			const Tool * const tool = reprap.GetCurrentTool();
+			if (tool != nullptr)
+			{
+				for (size_t i = 0; i < tool->DriveCount(); ++i)
 				{
-					moveBuffer.coords[i] = 0.0;
+					moveBuffer.coords[numAxes + tool->Drive(i)] = retractLength + retractExtra;
 				}
-				// Set the feed rate. If there is any Z hop then we need to pass the Z speed, else we pass the extrusion speed.
-				const float speedToUse = (retract) ? retractSpeed : unRetractSpeed;
-				moveBuffer.feedRate = (retractHop == 0.0 || retractLength == 0.0)
-										? speedToUse
-										: speedToUse * retractHop/retractLength;
-				moveBuffer.coords[Z_AXIS] += (retract) ? retractHop : -retractHop;
-				const float lengthToUse = (retract) ? -retractLength : retractLength + retractExtra;
-				for (size_t i = 0; i < nDrives; ++i)
-				{
-					moveBuffer.coords[numAxes + tool->Drive(i)] = lengthToUse;
-				}
-
-				moveBuffer.moveType = 0;
-				moveBuffer.isFirmwareRetraction = true;
-				moveBuffer.usePressureAdvance = false;
-				moveBuffer.filePos = (&gb == fileGCode) ? gb.MachineState().fileState.GetPosition() - fileInput->BytesCached() : noFilePosition;
-				moveBuffer.canPauseAfter = !retract;			// don't pause after a retraction because that could cause too much retraction
-				moveBuffer.xAxes = xAxes;
+				moveBuffer.feedRate = unRetractSpeed;
+				moveBuffer.canPauseAfter = true;
 				segmentsLeft = 1;
 			}
 		}
+#else
+		// Old code to do a single synchronised move
+		const uint32_t xAxes = reprap.GetCurrentXAxes();
+		reprap.GetMove()->GetCurrentUserPosition(moveBuffer.coords, 0, xAxes);
+		for (size_t i = numAxes; i < DRIVES; ++i)
+		{
+			moveBuffer.coords[i] = 0.0;
+		}
+		// Set the feed rate. If there is any Z hop then we need to pass the Z speed, else we pass the extrusion speed.
+		const float speedToUse = (retract) ? retractSpeed : unRetractSpeed;
+		moveBuffer.feedRate = (retractHop == 0.0 || retractLength == 0.0)
+								? speedToUse
+								: speedToUse * retractHop/retractLength;
+		moveBuffer.coords[Z_AXIS] += (retract) ? retractHop : -retractHop;
+		const float lengthToUse = (retract) ? -retractLength : retractLength + retractExtra;
+		const Tool * const tool = reprap.GetCurrentTool();
+		if (tool != nullptr)
+		{
+			for (size_t i = 0; i < tool->DriveCount(); ++i)
+			{
+				moveBuffer.coords[numAxes + tool->Drive(i)] = lengthToUse;
+			}
+		}
+
+		moveBuffer.moveType = 0;
+		moveBuffer.isFirmwareRetraction = true;
+		moveBuffer.usePressureAdvance = false;
+		moveBuffer.filePos = (&gb == fileGCode) ? gb.MachineState().fileState.GetPosition() - fileInput->BytesCached() : noFilePosition;
+		moveBuffer.canPauseAfter = !retract;			// don't pause after a retraction because that could cause too much retraction
+		moveBuffer.xAxes = xAxes;
+		segmentsLeft = 1;
+#endif
 		isRetracted = retract;
 	}
 	return true;

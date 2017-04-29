@@ -135,6 +135,7 @@ void Network::ShutdownProtocol(Protocol protocol)
 	{
 		r->Terminate(protocol);
 	}
+
 	switch(protocol)
 	{
 	case HttpProtocol:
@@ -147,7 +148,6 @@ void Network::ShutdownProtocol(Protocol protocol)
 	case FtpProtocol:
 		sockets[FtpSocketNumber].TerminateAndDisable();
 		sockets[FtpDataSocketNumber].TerminateAndDisable();
-		//TODO we may have a second FTP  socket on the main port
 		break;
 
 	case TelnetProtocol:

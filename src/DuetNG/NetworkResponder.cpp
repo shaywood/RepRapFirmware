@@ -176,18 +176,24 @@ void NetworkResponder::SendData()
 void NetworkResponder::ConnectionLost()
 {
 	CancelUpload();
+
 	OutputBuffer::ReleaseAll(outBuf);
+	outBuf = nullptr;
+
 	outStack->ReleaseAll();
+
 	if (fileBeingSent != nullptr)
 	{
 		fileBeingSent->Close();
 		fileBeingSent = nullptr;
 	}
+
 	if (skt != nullptr)
 	{
 		skt->Terminate();
 		skt = nullptr;
 	}
+
 	responderState = ResponderState::free;
 }
 
@@ -219,7 +225,7 @@ void NetworkResponder::CancelUpload()
 }
 
 // Try to upload some more data, returning true if we finished
-// Overridden in function HttpResponder
+// Overridden in derived classes HttpResponder and FtpResponder
 void NetworkResponder::DoFastUpload()
 {
 	// TODO combine this code with the version in HttpResponder

@@ -56,6 +56,7 @@ public:
 
 	bool FindResponder(Socket *skt, Protocol protocol);
 
+	const uint8_t *GetIPAddress() const { return ipAddress; }
 	void OpenDataPort(Port port);
 	void CloseDataPort();
 

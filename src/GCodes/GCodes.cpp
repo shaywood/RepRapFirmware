@@ -104,7 +104,7 @@ void GCodes::Init()
 	offSetSet = false;
 	runningConfigFile = false;
 	doingToolChange = false;
-	toolChangeParam = DefaultToolchangeParam;
+	toolChangeParam = DefaultToolChangeParam;
 	active = true;
 	longWait = platform->Time();
 	limitAxes = true;

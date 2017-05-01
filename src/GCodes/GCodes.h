@@ -63,7 +63,7 @@ struct Trigger
 const int TFreeBit = 1 << 0;
 const int TPreBit = 1 << 1;
 const int TPostBit = 1 << 2;
-const int DefaultToolchangeParam = TFreeBit | TPreBit | TPostBit;
+const int DefaultToolChangeParam = TFreeBit | TPreBit | TPostBit;
 
 //****************************************************************************************************
 
@@ -304,6 +304,7 @@ private:
 	bool changingTool;							// Is a tool being changed?
 	int oldToolNumber, newToolNumber;			// Tools being changed
 	int toolChangeParam;						// Bitmap of all the macros to be run during a tool change
+
 	const char* eofString;						// What's at the end of an HTML file?
 	uint8_t eofStringCounter;					// Check the...
 	uint8_t eofStringLength;					// ... EoF string as we read.

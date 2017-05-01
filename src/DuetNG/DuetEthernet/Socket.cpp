@@ -202,13 +202,12 @@ void Socket::Poll(bool full)
 // Try to receive more incoming data from the socket
 void Socket::ReceiveData()
 {
-	//TODO limit the number of buffers used by each socket
 	const uint16_t len = getSn_RX_RSR(socketNum);
 	if (len != 0 && NetworkBuffer::Count(receivedData) < MaxBuffersPerSocket)
 	{
 //		debugPrintf("%u available\n", len);
 		// There is data available, so allocate a buffer
-		//TODO: if there is already a buffer and it is in an appropriate state (i.e. receiving) and it has enough room, we could just append the data
+		//TODO: if there is already a buffer and it has enough room, we could just append the data
 		NetworkBuffer * const buf = NetworkBuffer::Allocate();
 		if (buf != nullptr)
 		{

@@ -147,7 +147,7 @@ const Pin ROLAND_RTS_PIN = xx;											// Expansion pin 12, PA13_RXD1
 // This is the mapping from logical pins 60+ to firmware pin numbers
 const Pin SpecialPinMap[] =
 {
-	88, 97, 98, 99														// We allow CS5-CS8 to be used because few users need >4 thermocouples or RTDs
+	24, 97, 98, 99														// We allow CS5-CS8 to be used because few users need >4 thermocouples or RTDs
 };
 const Pin DueX5GpioPinMap[] = { 211, 210, 209, 208 };					// GPIO 1-4 on DueX5
 const int HighestLogicalPin = 100 + ARRAY_SIZE(DueX5GpioPinMap) - 1;	// highest logical pin number on this electronics

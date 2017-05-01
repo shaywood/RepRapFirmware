@@ -16,7 +16,7 @@
 // Callback function from the hsmci driver, called while it is waiting for an SD card operation to complete
 extern "C" void hsmciIdle()
 {
-	if (reprap.GetSpinningModule() != moduleNetwork)	// I don't think this should ever be false because the Network module doesn't do file access, but just in case...
+	if (reprap.GetSpinningModule() != moduleNetwork)
 	{
 		reprap.GetNetwork()->Spin(false);
 	}
@@ -1463,7 +1463,7 @@ char RepRap::GetStatusCharacter() const
 			: (IsStopped()) 											? 'H'	// Halted
 			: (gCodes->IsPausing()) 									? 'D'	// Pausing / Decelerating
 			: (gCodes->IsResuming()) 									? 'R'	// Resuming
-			: (gCodes->IsDoingToolChange())								? 'T'	// Running tool change macros
+			: (gCodes->IsDoingToolChange())								? 'T'	// Changing tool
 			: (gCodes->IsPaused()) 										? 'S'	// Paused / Stopped
 			: (printMonitor->IsPrinting())								? 'P'	// Printing
 			: (gCodes->IsDoingToolChange())								? 'T'	// Changing tool

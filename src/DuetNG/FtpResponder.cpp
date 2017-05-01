@@ -92,7 +92,7 @@ bool FtpResponder::Spin()
 		return false;
 
 	case ResponderState::uploading:
-		DoFastUpload();
+		DoUpload();
 
 		if (!uploadError && skt->CanRead())
 		{
@@ -340,7 +340,7 @@ void FtpResponder::SendPassiveData()
 }
 
 // Write some more upload data
-void FtpResponder::DoFastUpload()
+void FtpResponder::DoUpload()
 {
 	// Write incoming data to the file
 	const uint8_t *buffer;

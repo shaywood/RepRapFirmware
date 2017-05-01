@@ -35,7 +35,7 @@ protected:
 	bool sendError;
 	void SendPassiveData();
 
-	void DoFastUpload() override;
+	void DoUpload();
 
 	bool ReadData();
 	void CharFromClient(char c);

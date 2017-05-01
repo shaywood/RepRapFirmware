@@ -76,11 +76,10 @@ protected:
 
 	void StartUpload(FileStore *file, const char *fileName);
 	void FinishUpload(uint32_t fileLength, time_t fileLastModified);
-	virtual void DoFastUpload();
 	virtual void CancelUpload();
 
-	static Platform * const GetPlatform() { return reprap.GetPlatform(); }
-	static Network * const GetNetwork() { return reprap.GetNetwork(); }
+	static Platform *GetPlatform() { return reprap.GetPlatform(); }
+	static Network *GetNetwork() { return reprap.GetNetwork(); }
 
 	// General state
 	NetworkResponder *next;								// next responder in the list

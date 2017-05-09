@@ -37,7 +37,7 @@ const size_t ROLAND_BUFFER_SIZE = 50;
 class Roland
 {
 	public:
-		Roland(Platform* p);
+		Roland(Platform& p);
 		void Init();
 		void Spin();
 		bool ProcessHome();
@@ -55,7 +55,7 @@ class Roland
 		void Zero(bool feed);
 		bool Busy();
 
-		Platform* platform;
+		Platform& platform;
 		float longWait;
 
 		float move[DRIVES+1];

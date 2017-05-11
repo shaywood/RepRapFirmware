@@ -10,7 +10,7 @@
 #include "RepRap.h"
 #include "Network.h"
 
-// TODO fif inefficiencies in this code and other parts of the WiFi interface at present:
+// TODO fix inefficiencies in this code and other parts of the WiFi interface at present:
 // 1. We keep polling all sockets instead of using the summary status to see which ones are active
 // 2. Send() in the NetworkResponder classes don't use the "Send and close" facility, they send a separate Close command
 
@@ -56,6 +56,15 @@ void Socket::Terminate()
 	state = (reply != 0) ? SocketState::broken : SocketState::inactive;
 	DiscardReceivedData();
 	txBufferSpace = 0;
+}
+
+// Called to terminate the connection unless it is already being closed
+void Socket::TerminatePolitely()
+{
+	if (state != SocketState::clientDisconnecting && state != SocketState::closing)
+	{
+		Terminate();
+	}
 }
 
 // Return true if there is or may soon be more data to read
@@ -143,7 +152,7 @@ void Socket::Poll(bool full)
 			// It's a new connection
 			if (reprap.Debug(moduleNetwork))
 			{
-				debugPrintf("New conn on socket %u\n", socketNum);
+				debugPrintf("New conn on socket %u for local port %u\n", socketNum, localPort);
 			}
 			localPort = resp.Value().localPort;
 			remotePort = resp.Value().remotePort;
@@ -255,7 +264,7 @@ void Socket::DiscardReceivedData()
 }
 
 // Send the data, returning the length buffered
-//TODO only try to send data if the status indicates rthat it is possible
+//TODO only try to send data if the status indicates that it is possible
 size_t Socket::Send(const uint8_t *data, size_t length)
 {
 	if (state == SocketState::connected && txBufferSpace != 0)

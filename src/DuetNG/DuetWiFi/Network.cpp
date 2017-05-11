@@ -89,9 +89,9 @@ static void EspTransferRequestIsr()
 /*-----------------------------------------------------------------------------------*/
 // WiFi interface class
 
-Network::Network(Platform& p) : platform(p), nextResponderToPoll(nullptr), uploader(nullptr), currentSocket(0),
-		state(NetworkState::disabled), requestedMode(WiFiState::disabled), currentMode(WiFiState::disabled), activated(false), espStatusChanged(false),
-		spiTxUnderruns(0), spiRxOverruns(0)
+Network::Network(Platform& p) : platform(p), nextResponderToPoll(nullptr), uploader(nullptr), currentSocket(0), ftpDataPort(0),
+		state(NetworkState::disabled), requestedMode(WiFiState::disabled), currentMode(WiFiState::disabled), activated(false),
+		espStatusChanged(false), spiTxUnderruns(0), spiRxOverruns(0)
 {
 	for (size_t i = 0; i < NumProtocols; ++i)
 	{
@@ -795,21 +795,41 @@ void Network::UpdateSocketStatus(uint16_t connectedSockets, uint16_t otherEndClo
 // Find a responder to process a new connection
 bool Network::FindResponder(Socket *skt, Port localPort)
 {
-	for (size_t i = 0; i < NumProtocols; ++i)
+	// Get the right protocol
+	Protocol protocol;
+	if (localPort == ftpDataPort)
 	{
-		if (protocolEnabled[i] && portNumbers[i] == localPort)
+		protocol = FtpDataProtocol;
+	}
+	else
+	{
+		bool protocolFound = false;
+		for (size_t i = 0; i < NumProtocols; ++i)
 		{
-			for (NetworkResponder *r = responders; r != nullptr; r = r->GetNext())
+			if (protocolEnabled[i] && portNumbers[i] == localPort)
 			{
-				if (r->Accept(skt, i))
-				{
-					return true;
-				}
+				protocol = i;
+				protocolFound = true;
+				break;
 			}
-			return false;	// no free responder, or protocol disabled
+		}
+
+		if (!protocolFound)
+		{
+			// Protocol is disabled
+			return false;
 		}
 	}
-	return false;			// unknown port number
+
+	// Try to find a responder to deal with this connection
+	for (NetworkResponder *r = responders; r != nullptr; r = r->GetNext())
+	{
+		if (r->Accept(skt, protocol))
+		{
+			return true;
+		}
+	}
+	return false;
 }
 
 // Open the FTP data port
@@ -825,7 +845,14 @@ void Network::CloseDataPort()
 	if (ftpDataPort != 0)
 	{
 		SendListenCommand(ftpDataPort, 0);
-		TerminateSockets(ftpDataPort);				// if the FTP responder wants to close the socket cleanly, it should have closed it itself
+		for (SocketNumber skt = 0; skt < NumTcpSockets; ++skt)
+		{
+			if (sockets[skt].GetLocalPort() == ftpDataPort)
+			{
+// if the FTP responder wants to close the socket cleanly, it should have closed it itself
+				sockets[skt].TerminatePolitely();
+			}
+		}
 		ftpDataPort = 0;
 	}
 }

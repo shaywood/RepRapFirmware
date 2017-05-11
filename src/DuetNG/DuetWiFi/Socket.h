@@ -22,6 +22,7 @@ public:
 	Port GetRemotePort() const { return remotePort; }
 	void Close();
 	void Terminate();
+	void TerminatePolitely();
 	bool ReadChar(char& c);
 	bool ReadBuffer(const uint8_t *&buffer, size_t &len);
 	void Taken(size_t len);

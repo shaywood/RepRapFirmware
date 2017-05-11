@@ -23,7 +23,7 @@ INCLUDES += -I"$(DUET_LIBRARY_PATH)/Flash" -I"$(DUET_LIBRARY_PATH)/RTCDue" -I"$(
 INCLUDES += -I"$(PWD)" -I"$(PWD)/DuetNG" -I"$(PWD)/DuetNG/DuetWiFi"
 
 # Get source files
-VPATH := $(PWD) $(PWD)/DuetNG $(PWD)/DuetNG/DuetWiFi $(PWD)/GCodes $(PWD)/Heating $(PWD)/Movement $(PWD)/Storage
+VPATH := $(PWD) $(PWD)/DuetNG $(PWD)/DuetNG/DuetWiFi $(PWD)/GCodes $(PWD)/Heating $(PWD)/Movement $(PWD)/Movement/BedProbing $(PWD)/Movement/Kinematics $(PWD)/Storage
 VPATH += $(PWD)/Libraries/Fatfs $(PWD)/Libraries/General $(PWD)/Libraries/Math $(PWD)/Libraries/MCP4461 $(PWD)/Libraries/TemperatureSensor $(PWD)/Libraries/sha1
 
 C_SOURCES += $(foreach dir,$(VPATH),$(wildcard $(dir)/*.c)) $(wildcard $(PWD)/*.c)

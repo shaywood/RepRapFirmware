@@ -22,7 +22,7 @@ INCLUDES += -I"$(DUET_LIBRARY_PATH)/Flash" -I"$(DUET_LIBRARY_PATH)/RTCDue" -I"$(
 INCLUDES += -I"$(PWD)" -I"$(PWD)/RADDS"
 
 # Get source files
-VPATH := $(PWD) $(PWD)/RADDS $(PWD)/GCodes $(PWD)/Heating $(PWD)/Movement $(PWD)/Storage
+VPATH := $(PWD) $(PWD)/RADDS $(PWD)/GCodes $(PWD)/Heating $(PWD)/Movement $(PWD)/Movement/BedProbing $(PWD)/Movement/Kinematics $(PWD)/Storage
 VPATH += $(PWD)/Libraries/Fatfs $(PWD)/Libraries/General $(PWD)/Libraries/Math $(PWD)/Libraries/MCP4461 $(PWD)/Libraries/TemperatureSensor $(PWD)/Libraries/sha1
 
 C_SOURCES += $(foreach dir,$(VPATH),$(wildcard $(dir)/*.c)) $(wildcard $(PWD)/*.c)
@@ -45,11 +45,11 @@ LDFLAGS := -L"$(DUET_BOARD_PATH)/variants/RADDS" $(OPTIMISATION) -Wl,--gc-sectio
 .PHONY += all
 all: $(OUTPUT_PATH)/RepRapFirmware-$(VERSION).bin
 $(OUTPUT_PATH)/RepRapFirmware-$(VERSION).bin: $(OUTPUT_PATH)/RepRapFirmware-$(VERSION).elf
-	@echo "  BIN     ../Release/Duet-0.6-0.8.5/RepRapFirmware-$(VERSION).bin"
+	@echo "  BIN     ../Release/RADDS/RepRapFirmware-$(VERSION).bin"
 	@$(OBJCOPY) -O binary $(OUTPUT_PATH)/RepRapFirmware-$(VERSION).elf $(OUTPUT_PATH)/RepRapFirmware-$(VERSION).bin
 
 $(OUTPUT_PATH)/RepRapFirmware-$(VERSION).elf: $(BUILD_PATH) $(OUTPUT_PATH) $(C_OBJS) $(CPP_OBJS)
-	@echo "  LD      ../Release/Duet-0.6-0.8.5/RepRapFirmware-$(VERSION).elf"
+	@echo "  LD      ../Release/RADDS/RepRapFirmware-$(VERSION).elf"
 	@$(LD) $(LDFLAGS) -o $(OUTPUT_PATH)/RepRapFirmware-$(VERSION).elf
 -include $(DEPS)
 

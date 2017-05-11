@@ -465,7 +465,7 @@ void Network::SetHostname(const char *name)
 		}
 	}
 
-	if (i)
+	if (i > 0)
 	{
 		hostname[i] = 0;
 	}

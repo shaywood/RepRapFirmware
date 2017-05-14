@@ -11,11 +11,22 @@
 #include "RepRapFirmware.h"
 #include "NetworkDefs.h"
 
+enum class SocketState : uint8_t
+{
+	inactive,
+	waitingForResponder,
+	connected,
+	clientDisconnecting,
+	closing,
+	broken
+};
+
 class Socket
 {
 public:
 	Socket();
 	void Init(SocketNumber n);
+	SocketState State() const { return state; }
 	void Poll(bool full);
 	Port GetLocalPort() const { return localPort; }
 	uint32_t GetRemoteIP() const { return remoteIp; }
@@ -34,16 +45,6 @@ public:
 	bool NeedsPolling() const;
 
 private:
-	enum class SocketState : uint8_t
-	{
-		inactive,
-		waitingForResponder,
-		connected,
-		clientDisconnecting,
-		closing,
-		broken
-	};
-
 	void ReInit();
 	void ReceiveData();
 	void DiscardReceivedData();
@@ -53,7 +54,6 @@ private:
 	uint32_t remoteIp;									// The remote IP address
 	NetworkBuffer *receivedData;						// List of buffers holding received data
 	uint32_t whenConnected;
-	uint16_t txBufferSpace;								// How much free transmit buffer space the WiFi mofule reported
 	SocketNumber socketNum;								// The WiFi socket number we are using
 	SocketState state;
 	bool needsPolling;

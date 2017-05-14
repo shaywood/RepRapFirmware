@@ -25,7 +25,6 @@ void Socket::Init(SocketNumber n)
 {
 	socketNum = n;
 	state = SocketState::inactive;
-	txBufferSpace = 0;
 }
 
 // Close a connection when the last packet has been sent
@@ -40,6 +39,7 @@ void Socket::Close()
 			return;
 		}
 	}
+
 	if (reprap.Debug(moduleNetwork))
 	{
 		debugPrintf("close failed, ir wrong state\n");
@@ -49,13 +49,15 @@ void Socket::Close()
 
 // Terminate a connection immediately
 // The WiFi server code is written so that terminating a socket should always work, even if the socket isn't in use.
-// So we can call this after any sort of error on a socket.
+// So we can call this after any sort of error on a socket as long as it is in use.
 void Socket::Terminate()
 {
-	const int32_t reply = reprap.GetNetwork().SendCommand(NetworkCommand::connAbort, socketNum, 0, nullptr, 0, nullptr, 0);
-	state = (reply != 0) ? SocketState::broken : SocketState::inactive;
+	if (state != SocketState::inactive)
+	{
+		const int32_t reply = reprap.GetNetwork().SendCommand(NetworkCommand::connAbort, socketNum, 0, nullptr, 0, nullptr, 0);
+		state = (reply != 0) ? SocketState::broken : SocketState::inactive;
+	}
 	DiscardReceivedData();
-	txBufferSpace = 0;
 }
 
 // Called to terminate the connection unless it is already being closed
@@ -182,7 +184,7 @@ void Socket::Poll(bool full)
 
 		if (state == SocketState::connected)
 		{
-			txBufferSpace = resp.Value().writeBufferSpace;
+			//txBufferSpace = resp.Value().writeBufferSpace;		// unused due to performance reasons
 			if (resp.Value().bytesAvailable != 0)
 			{
 				ReceiveData();
@@ -198,12 +200,19 @@ void Socket::Poll(bool full)
 			ReceiveData();
 		}
 
-		if (state != SocketState::clientDisconnecting && reprap.Debug(moduleNetwork))
+		if (state == SocketState::clientDisconnecting)
 		{
-			debugPrintf("Client disconnected on socket %u\n", socketNum);
+			// We already got here before, so close the connection once and for all
+			Close();
 		}
-
-		state = SocketState::clientDisconnecting;
+		else
+		{
+			state = SocketState::clientDisconnecting;
+			if (reprap.Debug(moduleNetwork))
+			{
+				debugPrintf("Client disconnected on socket %u\n", socketNum);
+			}
+		}
 		break;
 
 	default:
@@ -214,6 +223,11 @@ void Socket::Poll(bool full)
 			{
 				debugPrintf("Unexpected state change on socket %u\n", socketNum);
 			}
+			state = SocketState::broken;
+		}
+		else if (state == SocketState::closing)
+		{
+			// Socket closed
 			state = SocketState::inactive;
 		}
 		break;
@@ -264,23 +278,22 @@ void Socket::DiscardReceivedData()
 }
 
 // Send the data, returning the length buffered
-//TODO only try to send data if the status indicates that it is possible
 size_t Socket::Send(const uint8_t *data, size_t length)
 {
-	if (state == SocketState::connected && txBufferSpace != 0)
+	if (state == SocketState::connected)
 	{
-		const int32_t reply = reprap.GetNetwork().SendCommand(NetworkCommand::connWrite, socketNum, 0, data, min<size_t>(length, txBufferSpace), nullptr, 0);
+		const int32_t reply = reprap.GetNetwork().SendCommand(NetworkCommand::connWrite, socketNum, 0, data, length, nullptr, 0);
 		if (reply >= 0)
 		{
-			txBufferSpace -= (size_t)reply;
 			return (size_t)reply;
 		}
-		if (reprap.Debug(moduleNetwork))
-		{
-			debugPrintf("Send failed, terminating\n");
-		}
-		Terminate();							// something is not right, so terminate the socket for safety
 	}
+
+	if (reprap.Debug(moduleNetwork))
+	{
+		debugPrintf("Send failed, terminating\n");
+	}
+	state = SocketState::broken;							// something is not right, terminate the socket soon
 	return 0;
 }
 
@@ -290,11 +303,17 @@ void Socket::Send()
 	if (state == SocketState::connected)
 	{
 		const int32_t reply = reprap.GetNetwork().SendCommand(NetworkCommand::connWrite, socketNum, MessageHeaderSamToEsp::FlagPush, nullptr, 0, nullptr, 0);
-		if (reply < 0)
+		if (reply >= 0)
 		{
-			Terminate();						// something is not right, so terminate the socket for safety
+			return;
 		}
 	}
+
+	if (reprap.Debug(moduleNetwork))
+	{
+		debugPrintf("Send failed, terminating\n");
+	}
+	state = SocketState::broken;							// something is not right, terminate the socket soon
 }
 
 // Return true if we need to poll this socket

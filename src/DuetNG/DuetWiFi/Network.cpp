@@ -405,7 +405,7 @@ void Network::Spin(bool full)
 			{
 				// Setup the SPI controller in slave mode and assign the CS pin to it
 				platform.Message(HOST_MESSAGE, "WiFi module started\n");
-				SetupSpi();						// set up the SPI subsystem
+				SetupSpi();									// set up the SPI subsystem
 				state = NetworkState::active;
 				currentMode = WiFiState::idle;				// wifi module is running but inactive
 
@@ -491,21 +491,18 @@ void Network::Spin(bool full)
 				}
 
 				// Poll the responders
-				if (full)
+				NetworkResponder *nr = nextResponderToPoll;
+				bool doneSomething = false;
+				do
 				{
-					NetworkResponder *nr = nextResponderToPoll;
-					bool doneSomething = false;
-					do
+					if (nr == nullptr)
 					{
-						if (nr == nullptr)
-						{
-							nr = responders;		// 'responders' can't be null at this point
-						}
-						doneSomething = nr->Spin();
-						nr = nr->GetNext();
-					} while (!doneSomething && nr != nextResponderToPoll);
-					nextResponderToPoll = nr;
-				}
+						nr = responders;		// 'responders' can't be null at this point
+					}
+					doneSomething = nr->Spin();
+					nr = nr->GetNext();
+				} while (!doneSomething && nr != nextResponderToPoll);
+				nextResponderToPoll = nr;
 			}
 		}
 		else if (currentMode == requestedMode && (currentMode == WiFiState::connected || currentMode == WiFiState::runningAsAccessPoint))
@@ -631,7 +628,12 @@ void Network::Diagnostics(MessageType mtype)
 		}
 	}
 	HttpResponder::CommonDiagnostics(mtype);
-	platform.Message(mtype, "Responder states:");
+	platform.Message(mtype, "Socket states: ");
+	for (size_t i = 0; i < NumTcpSockets; i++)
+	{
+		platform.MessageF(mtype, " %d", sockets[i].State());
+	}
+	platform.Message(mtype, "\nResponder states:");
 	for (NetworkResponder *r = responders; r != nullptr; r = r->GetNext())
 	{
 		r->Diagnostics(mtype);

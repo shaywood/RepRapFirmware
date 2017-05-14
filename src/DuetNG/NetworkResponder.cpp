@@ -188,6 +188,12 @@ void NetworkResponder::ConnectionLost()
 		fileBeingSent = nullptr;
 	}
 
+	if (fileBuffer != nullptr)
+	{
+		fileBuffer->Release();
+		fileBuffer = nullptr;
+	}
+
 	if (skt != nullptr)
 	{
 		skt->Terminate();

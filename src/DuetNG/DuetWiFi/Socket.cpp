@@ -182,13 +182,9 @@ void Socket::Poll(bool full)
 			}
 		}
 
-		if (state == SocketState::connected)
+		if (state == SocketState::connected && resp.Value().bytesAvailable != 0)
 		{
-			//txBufferSpace = resp.Value().writeBufferSpace;		// unused due to performance reasons
-			if (resp.Value().bytesAvailable != 0)
-			{
-				ReceiveData();
-			}
+			ReceiveData();
 		}
 		break;
 

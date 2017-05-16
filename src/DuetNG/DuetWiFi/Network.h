@@ -119,7 +119,7 @@ private:
 
 	void SetupSpi();
 
-	void SendListenCommand(Port port, unsigned int maxConnections);
+	void SendListenCommand(Port port, Protocol protocol, unsigned int maxConnections);
 	void GetNewStatus();
 
 	static const char* TranslateEspResetReason(uint32_t reason);

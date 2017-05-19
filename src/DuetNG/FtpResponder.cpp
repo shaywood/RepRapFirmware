@@ -352,9 +352,8 @@ void FtpResponder::DoUpload()
 			GetPlatform().MessageF(HOST_MESSAGE, "Writing %u bytes of upload data\n", len);
 		}
 
-		const bool success = fileBeingUploaded.Write(reinterpret_cast<const char*>(buffer), len);
 		dataSocket->Taken(len);
-		if (!success)
+		if (!fileBeingUploaded.Write(buffer, len))
 		{
 			uploadError = true;
 			GetPlatform().Message(GENERIC_MESSAGE, "Error: Could not write upload data!\n");

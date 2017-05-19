@@ -23,6 +23,7 @@ bool FtpResponder::Accept(Socket *s, Protocol protocol)
 		// Make sure we can get an output buffer before we accept the connection, or we won't be able to reply
 		if (outBuf != nullptr || OutputBuffer::Allocate(outBuf))
 		{
+			clientPointer = 0;
 			skt = s;
 			if (reprap.Debug(moduleWebserver))
 			{

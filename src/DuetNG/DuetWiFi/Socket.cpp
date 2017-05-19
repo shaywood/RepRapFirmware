@@ -148,6 +148,34 @@ void Socket::Poll(bool full)
 
 	switch (resp.Value().state)
 	{
+	case ConnState::otherEndClosed:
+		// Check for further incoming packets before this socket is finally closed.
+		// This must be done to ensure that FTP uploads are not cut off.
+		if (resp.Value().bytesAvailable != 0)
+		{
+			ReceiveData();
+		}
+
+		if (state == SocketState::clientDisconnecting)
+		{
+			// We already got here before, so close the connection once and for all
+			Close();
+			break;
+		}
+		else if (state != SocketState::inactive)
+		{
+			state = SocketState::clientDisconnecting;
+			if (reprap.Debug(moduleNetwork))
+			{
+				debugPrintf("Client disconnected on socket %u\n", socketNum);
+			}
+			break;
+		}
+		// We can get here if a client has sent very little data and then instantly closed
+		// the connection, e.g. when an FTP client transferred very small files over the
+		// data port. In such cases we must notify the responder about this transmission!
+		// no break
+
 	case ConnState::connected:
 		if (full && state != SocketState::connected)
 		{
@@ -166,7 +194,7 @@ void Socket::Poll(bool full)
 			}
 			if (network.FindResponder(this, localPort))
 			{
-				state = SocketState::connected;
+				state = (resp.Value().state == ConnState::connected) ? SocketState::connected : SocketState::clientDisconnecting;
 				if (reprap.Debug(moduleNetwork))
 				{
 					debugPrintf("Found responder\n", socketNum);
@@ -185,29 +213,6 @@ void Socket::Poll(bool full)
 		if (state == SocketState::connected && resp.Value().bytesAvailable != 0)
 		{
 			ReceiveData();
-		}
-		break;
-
-	case ConnState::otherEndClosed:
-		// Check for further incoming packets before this socket is finally closed.
-		// This must be done to ensure that FTP uploads are not cut off.
-		if (resp.Value().bytesAvailable != 0)
-		{
-			ReceiveData();
-		}
-
-		if (state == SocketState::clientDisconnecting)
-		{
-			// We already got here before, so close the connection once and for all
-			Close();
-		}
-		else
-		{
-			state = SocketState::clientDisconnecting;
-			if (reprap.Debug(moduleNetwork))
-			{
-				debugPrintf("Client disconnected on socket %u\n", socketNum);
-			}
 		}
 		break;
 

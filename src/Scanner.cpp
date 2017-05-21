@@ -168,7 +168,6 @@ void Scanner::Spin()
 			break;
 
 		case ScannerState::Uploading:
-		{
 			// Write incoming scan data from USB to the file
 			while (SERIAL_MAIN_DEVICE.available() > 0)
 			{
@@ -202,7 +201,6 @@ void Scanner::Spin()
 				}
 			}
 			break;
-		}
 
 		default:
 			// Pick up incoming commands only if the GCodeBuffer is idle.

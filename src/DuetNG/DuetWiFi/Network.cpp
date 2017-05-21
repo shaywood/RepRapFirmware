@@ -27,7 +27,7 @@
 
 #include "matrix.h"
 
-const uint32_t WifiResponseTimeoutMillis = 1000;
+const uint32_t WifiResponseTimeoutMillis = 200;
 const uint32_t WiFiStartupMillis = 300;
 
 const unsigned int MaxHttpConnections = 4;
@@ -377,7 +377,7 @@ void Network::Stop()
 	{
 		digitalWrite(SamTfrReadyPin, LOW);			// tell the ESP we can't receive
 		digitalWrite(EspResetPin, LOW);				// put the ESP back into reset
-		detachInterrupt(EspTransferRequestPin);		// ignore IRQs from the transfer requst pin
+		detachInterrupt(EspTransferRequestPin);		// ignore IRQs from the transfer request pin
 
 		NVIC_DisableIRQ(SPI_IRQn);
 		spi_disable(SPI);
@@ -879,7 +879,6 @@ void Network::CloseDataPort()
 		{
 			if (sockets[skt].GetLocalPort() == ftpDataPort)
 			{
-// if the FTP responder wants to close the socket cleanly, it should have closed it itself
 				sockets[skt].TerminatePolitely();
 			}
 		}

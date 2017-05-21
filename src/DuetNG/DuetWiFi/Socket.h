@@ -11,22 +11,12 @@
 #include "RepRapFirmware.h"
 #include "NetworkDefs.h"
 
-enum class SocketState : uint8_t
-{
-	inactive,
-	waitingForResponder,
-	connected,
-	clientDisconnecting,
-	closing,
-	broken
-};
-
 class Socket
 {
 public:
 	Socket();
 	void Init(SocketNumber n);
-	SocketState State() const { return state; }
+	int State() const { return (int)state; }				// used only for reporting debug info, hence the 'int' return
 	void Poll(bool full);
 	Port GetLocalPort() const { return localPort; }
 	uint32_t GetRemoteIP() const { return remoteIp; }
@@ -45,8 +35,18 @@ public:
 	bool NeedsPolling() const;
 
 private:
+	enum class SocketState : uint8_t
+	{
+		inactive,
+		waitingForResponder,
+		connected,
+		clientDisconnecting,
+		closing,
+		broken
+	};
+
 	void ReInit();
-	void ReceiveData();
+	void ReceiveData(uint16_t bytesAvailable);
 	void DiscardReceivedData();
 
 	Port localPort, remotePort;							// The local and remote ports

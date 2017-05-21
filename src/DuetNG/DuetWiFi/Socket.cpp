@@ -10,10 +10,6 @@
 #include "RepRap.h"
 #include "Network.h"
 
-// TODO fix inefficiencies in this code and other parts of the WiFi interface at present:
-// 1. We keep polling all sockets instead of using the summary status to see which ones are active
-// 2. Send() in the NetworkResponder classes don't use the "Send and close" facility, they send a separate Close command
-
 const uint32_t FindResponderTimeout = 2000;			// how long we wait for a responder to become available
 const unsigned int MaxBuffersPerSocket = 4;
 
@@ -48,8 +44,7 @@ void Socket::Close()
 }
 
 // Terminate a connection immediately
-// The WiFi server code is written so that terminating a socket should always work, even if the socket isn't in use.
-// So we can call this after any sort of error on a socket as long as it is in use.
+// We can call this after any sort of error on a socket as long as it is in use.
 void Socket::Terminate()
 {
 	if (state != SocketState::inactive)
@@ -58,6 +53,7 @@ void Socket::Terminate()
 		state = (reply != 0) ? SocketState::broken : SocketState::inactive;
 	}
 	DiscardReceivedData();
+	//txBufferSpace = 0;
 }
 
 // Called to terminate the connection unless it is already being closed
@@ -151,10 +147,7 @@ void Socket::Poll(bool full)
 	case ConnState::otherEndClosed:
 		// Check for further incoming packets before this socket is finally closed.
 		// This must be done to ensure that FTP uploads are not cut off.
-		if (resp.Value().bytesAvailable != 0)
-		{
-			ReceiveData();
-		}
+		ReceiveData(resp.Value().bytesAvailable != 0);
 
 		if (state == SocketState::clientDisconnecting)
 		{
@@ -210,9 +203,10 @@ void Socket::Poll(bool full)
 			}
 		}
 
-		if (state == SocketState::connected && resp.Value().bytesAvailable != 0)
+		if (state == SocketState::connected)
 		{
-			ReceiveData();
+			ReceiveData(resp.Value().bytesAvailable != 0);
+			//txBufferSpace = resp.Value().writeBufferSpace;
 		}
 		break;
 
@@ -237,35 +231,51 @@ void Socket::Poll(bool full)
 	needsPolling = false;
 }
 
-// Try to receive more incoming data from the socket
-void Socket::ReceiveData()
+// Try to receive more incoming data from the socket.
+void Socket::ReceiveData(uint16_t bytesAvailable)
 {
-	if (NetworkBuffer::Count(receivedData) < MaxBuffersPerSocket)
+	if (bytesAvailable != 0)
 	{
-//		debugPrintf("%u available\n", len);
-		// There is data available, so allocate a buffer
-		//TODO: if there is already a buffer and it is in an appropriate state (i.e. receiving) and it has enough room, we could just append the data
-		NetworkBuffer * const buf = NetworkBuffer::Allocate();
-		if (buf != nullptr)
+//		debugPrintf("%u available\n", bytesAvailable);
+		// First see if we already have a buffer with enough room
+		NetworkBuffer *const lastBuffer = NetworkBuffer::FindLast(receivedData);
+		if (lastBuffer != nullptr && (bytesAvailable <= lastBuffer->SpaceLeft() || (lastBuffer->SpaceLeft() != 0 && NetworkBuffer::Count(receivedData) >= MaxBuffersPerSocket)))
 		{
-			//TODO if an error occurs in the following transaction and 'full' is not set, it would be better not to call Platform::Message in SendCommand()
-			const int32_t ret = reprap.GetNetwork().SendCommand(NetworkCommand::connRead, socketNum, 0, nullptr, 0, buf->Data(), NetworkBuffer::bufferSize);
-			if (ret > 0)
+			// Read data into the existing buffer
+			const size_t maxToRead = min<size_t>(lastBuffer->SpaceLeft(), MaxDataLength);
+			const int32_t ret = reprap.GetNetwork().SendCommand(NetworkCommand::connRead, socketNum, 0, nullptr, 0, lastBuffer->UnwrittenData(), maxToRead);
+			if (ret > 0 && (size_t)ret <= maxToRead)
 			{
-				buf->dataLength = (size_t)ret;
-				buf->readPointer = 0;
-				NetworkBuffer::AppendToList(&receivedData, buf);
+				lastBuffer->dataLength += (size_t)ret;
 				if (reprap.Debug(moduleNetwork))
 				{
-					debugPrintf("Received %u bytes\n", buf->dataLength);
+					debugPrintf("Received %u bytes\n", (unsigned int)ret);
 				}
 			}
-			else
-			{
-				buf->Release();
-			}
 		}
-//		else debugPrintf("no buffer\n");
+		else if (NetworkBuffer::Count(receivedData) < MaxBuffersPerSocket)
+		{
+			NetworkBuffer * const buf = NetworkBuffer::Allocate();
+			if (buf != nullptr)
+			{
+				const size_t maxToRead = min<size_t>(NetworkBuffer::bufferSize, MaxDataLength);
+				const int32_t ret = reprap.GetNetwork().SendCommand(NetworkCommand::connRead, socketNum, 0, nullptr, 0, buf->Data(), maxToRead);
+				if (ret > 0 && (size_t)ret <= maxToRead)
+				{
+					buf->dataLength = (size_t)ret;
+					NetworkBuffer::AppendToList(&receivedData, buf);
+					if (reprap.Debug(moduleNetwork))
+					{
+						debugPrintf("Received %u bytes\n", (unsigned int)ret);
+					}
+				}
+				else
+				{
+					buf->Release();
+				}
+			}
+//			else debugPrintf("no buffer\n");
+		}
 	}
 }
 

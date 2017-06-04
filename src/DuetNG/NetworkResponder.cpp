@@ -179,7 +179,6 @@ void NetworkResponder::ConnectionLost()
 
 	OutputBuffer::ReleaseAll(outBuf);
 	outBuf = nullptr;
-
 	outStack->ReleaseAll();
 
 	if (fileBeingSent != nullptr)

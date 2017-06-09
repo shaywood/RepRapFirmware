@@ -21,6 +21,7 @@ void Socket::Init(SocketNumber n)
 {
 	socketNum = n;
 	state = SocketState::inactive;
+	txBufferSpace = 0;
 }
 
 // Close a connection when the last packet has been sent
@@ -53,7 +54,7 @@ void Socket::Terminate()
 		state = (reply != 0) ? SocketState::broken : SocketState::inactive;
 	}
 	DiscardReceivedData();
-	//txBufferSpace = 0;
+	txBufferSpace = 0;
 }
 
 // Called to terminate the connection unless it is already being closed
@@ -205,7 +206,7 @@ void Socket::Poll(bool full)
 
 		if (state == SocketState::connected)
 		{
-			//txBufferSpace = resp.Value().writeBufferSpace;
+			txBufferSpace = resp.Value().writeBufferSpace;
 			ReceiveData(resp.Value().bytesAvailable);
 		}
 		break;
@@ -291,20 +292,21 @@ void Socket::DiscardReceivedData()
 // Send the data, returning the length buffered
 size_t Socket::Send(const uint8_t *data, size_t length)
 {
-	if (state == SocketState::connected)
+	if (state == SocketState::connected && txBufferSpace != 0)
 	{
-		const int32_t reply = reprap.GetNetwork().SendCommand(NetworkCommand::connWrite, socketNum, 0, data, length, nullptr, 0);
-		if (reply >= 0)
+		const size_t lengthToSend = min<size_t>(length, min<size_t>(txBufferSpace, MaxDataLength));
+		const int32_t reply = reprap.GetNetwork().SendCommand(NetworkCommand::connWrite, socketNum, 0, data, lengthToSend, nullptr, 0);
+		if (reply >= 0 && (size_t)reply <= lengthToSend)
 		{
+			txBufferSpace -= (size_t)reply;
 			return (size_t)reply;
 		}
+		if (reprap.Debug(moduleNetwork))
+		{
+			debugPrintf("Send failed, terminating\n");
+		}
+		state = SocketState::broken;							// something is not right, terminate the socket soon
 	}
-
-	if (reprap.Debug(moduleNetwork))
-	{
-		debugPrintf("Send failed, terminating\n");
-	}
-	state = SocketState::broken;							// something is not right, terminate the socket soon
 	return 0;
 }
 
@@ -314,17 +316,15 @@ void Socket::Send()
 	if (state == SocketState::connected)
 	{
 		const int32_t reply = reprap.GetNetwork().SendCommand(NetworkCommand::connWrite, socketNum, MessageHeaderSamToEsp::FlagPush, nullptr, 0, nullptr, 0);
-		if (reply >= 0)
+		if (reply < 0)
 		{
-			return;
+			if (reprap.Debug(moduleNetwork))
+			{
+				debugPrintf("Send failed, terminating\n");
+			}
+			state = SocketState::broken;						// something is not right, terminate the socket soon
 		}
 	}
-
-	if (reprap.Debug(moduleNetwork))
-	{
-		debugPrintf("Send failed, terminating\n");
-	}
-	state = SocketState::broken;							// something is not right, terminate the socket soon
 }
 
 // Return true if we need to poll this socket

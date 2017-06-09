@@ -198,7 +198,7 @@ void Network::StartProtocol(Protocol protocol)
 	switch(protocol)
 	{
 	case HttpProtocol:
-		SendListenCommand(portNumbers[protocol], HttpProtocol, MaxHttpConnections);
+		SendListenCommand(portNumbers[protocol], protocol, MaxHttpConnections);
 		break;
 
 	case FtpProtocol:
@@ -369,7 +369,7 @@ void Network::Start()
 	// Relinquish control of our CS pin so that the ESP can take it over
 	pinMode(SamCsPin, INPUT);
 
-	// Set the data request pin to be an input.
+	// Set the data request pin to be an input
 	pinMode(EspTransferRequestPin, INPUT_PULLUP);
 
 	// The ESP takes about 300ms before it starts talking to us, so don't wait for it here, do that in Spin()
@@ -533,18 +533,21 @@ void Network::Spin(bool full)
 				}
 
 				// Poll the responders
-				NetworkResponder *nr = nextResponderToPoll;
-				bool doneSomething = false;
-				do
+				if (full)
 				{
-					if (nr == nullptr)
+					NetworkResponder *nr = nextResponderToPoll;
+					bool doneSomething = false;
+					do
 					{
-						nr = responders;		// 'responders' can't be null at this point
-					}
-					doneSomething = nr->Spin();
-					nr = nr->GetNext();
-				} while (!doneSomething && nr != nextResponderToPoll);
-				nextResponderToPoll = nr;
+						if (nr == nullptr)
+						{
+							nr = responders;		// 'responders' can't be null at this point
+						}
+						doneSomething = nr->Spin();
+						nr = nr->GetNext();
+					} while (!doneSomething && nr != nextResponderToPoll);
+					nextResponderToPoll = nr;
+				}
 			}
 		}
 		else if (currentMode == requestedMode && (currentMode == WiFiState::connected || currentMode == WiFiState::runningAsAccessPoint))
@@ -792,7 +795,7 @@ void Network::SetHostname(const char *name)
 		}
 	}
 
-	if (i > 0)
+	if (i != 0)
 	{
 		hostname[i] = 0;
 	}

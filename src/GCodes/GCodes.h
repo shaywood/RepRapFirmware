@@ -27,6 +27,7 @@ Licence: GPL
 #include "Libraries/sha1/sha1.h"
 #include "Platform.h"		// for type EndStopHit
 #include "GCodeInput.h"
+#include "Tools/Filament.h"
 
 class GCodeBuffer;
 class GCodeQueue;
@@ -227,6 +228,8 @@ private:
 	void SetPositions(const float positionNow[DRIVES], bool doBedCompensation = true); // Set the current position to be this
 	const char *TranslateEndStopResult(EndStopHit es);					// Translate end stop result to text
 	bool RetractFilament(GCodeBuffer& gb, bool retract);				// Retract or un-retract filaments
+	bool LoadFilament(GCodeBuffer& gb, StringRef& reply, bool &error);	// Load the specified filament into a tool
+	bool UnloadFilament(GCodeBuffer& gb, StringRef& reply, bool &error); // Unload the current filament from a tool
 	bool ChangeMicrostepping(size_t drive, int microsteps, int mode) const;	// Change microstepping on the specified drive
 	void ListTriggers(StringRef reply, TriggerMask mask);				// Append a list of trigger endstops to a message
 	void CheckTriggers();												// Check for and execute triggers
@@ -306,7 +309,6 @@ private:
 	FileData fileToPrint;
 	FileStore* fileBeingWritten;				// A file to write G Codes (or sometimes HTML) to
 	uint16_t toBeHomed;							// Bitmap of axes still to be homed
-	bool changingTool;							// Is a tool being changed?
 	int oldToolNumber, newToolNumber;			// Tools being changed
 	int toolChangeParam;						// Bitmap of all the macros to be run during a tool change
 
@@ -369,6 +371,7 @@ private:
 	bool cancelWait;							// Set true to cancel waiting
 	bool displayNoToolWarning;					// True if we need to display a 'no tool selected' warning
 	bool displayDeltaNotHomedWarning;			// True if we need to display a 'attempt to move before homing on a delta printer' message
+	char filamentToLoad[FilamentNameLength];	// Name of the filament being loaded
 };
 
 //*****************************************************************************************************

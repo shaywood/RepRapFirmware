@@ -7,7 +7,8 @@
 #include "Platform.h"
 #include "Scanner.h"
 #include "PrintMonitor.h"
-#include "Tool.h"
+#include "Tools/Tool.h"
+#include "Tools/Filament.h"
 
 #if !defined(__RADDS__) && !defined(__ALLIGATOR__)
 # include "sam/drivers/hsmci/hsmci.h"
@@ -852,11 +853,16 @@ OutputBuffer *RepRap::GetStatusResponse(uint8_t type, ResponseSource source)
 		/* Tool Mapping */
 		{
 			response->cat(",\"tools\":[");
-			for(Tool *tool = toolList; tool != nullptr; tool = tool->Next())
+			for (Tool *tool = toolList; tool != nullptr; tool = tool->Next())
 			{
+				// Number and Name
+				const char *toolName = tool->GetName();
+				response->catf("{\"number\":%d,\"name\":", tool->Number());
+				response->EncodeString(toolName, strlen(toolName), false);
+
 				// Heaters
-				response->catf("{\"number\":%d,\"heaters\":[", tool->Number());
-				for(size_t heater=0; heater<tool->HeaterCount(); heater++)
+				response->cat(",\"heaters\":[");
+				for (size_t heater = 0; heater < tool->HeaterCount(); heater++)
 				{
 					response->catf("%d", tool->Heater(heater));
 					if (heater + 1 < tool->HeaterCount())
@@ -867,7 +873,7 @@ OutputBuffer *RepRap::GetStatusResponse(uint8_t type, ResponseSource source)
 
 				// Extruder drives
 				response->cat("],\"drives\":[");
-				for(size_t drive=0; drive<tool->DriveCount(); drive++)
+				for (size_t drive = 0; drive < tool->DriveCount(); drive++)
 				{
 					response->catf("%d", tool->Drive(drive));
 					if (drive + 1 < tool->DriveCount())
@@ -894,16 +900,18 @@ OutputBuffer *RepRap::GetStatusResponse(uint8_t type, ResponseSource source)
 						response->catf("%u", xi);
 					}
 				}
+				response->cat("]]");
+
+				// Filament (if any)
+				if (tool->GetFilament() != nullptr)
+				{
+					const char *filamentName = tool->GetFilament()->GetName();
+					response->catf(",\"filament\":");
+					response->EncodeString(filamentName, strlen(filamentName), false);
+				}
 
 				// Do we have any more tools?
-				if (tool->Next() != nullptr)
-				{
-					response->cat("]]},");
-				}
-				else
-				{
-					response->cat("]]}");
-				}
+				response->cat((tool->Next() != nullptr) ? "}," : "}");
 			}
 			response->cat("]");
 		}

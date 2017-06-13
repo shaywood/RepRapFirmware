@@ -46,7 +46,9 @@ enum class GCodeState : uint8_t
 	gridProbing4,
 
 	doingFirmwareRetraction,
-	doingFirmwareUnRetraction
+	doingFirmwareUnRetraction,
+	loadingFilament,
+	unloadingFilament
 };
 
 // Class to hold the state of gcode execution for some input source

@@ -17,7 +17,7 @@
 #include "Scanner.h"
 #include "PrintMonitor.h"
 #include "RepRap.h"
-#include "Tool.h"
+#include "Tools/Tool.h"
 
 #ifdef DUET_NG
 # include "FirmwareUpdater.h"
@@ -156,20 +156,31 @@ bool GCodes::HandleGcode(GCodeBuffer& gb, StringRef& reply)
 		break;
 
 	case 10: // Set/report offsets and temperatures, or retract
-		if (gb.Seen('P'))
 		{
-			if (!SetOrReportOffsets(gb, reply))
+			bool modifyingTool = false;
+			modifyingTool |= gb.Seen('P');
+			modifyingTool |= gb.Seen('R');
+			modifyingTool |= gb.Seen('S');
+			for (size_t axis = 0; axis < numVisibleAxes; ++axis)
 			{
-				return false;
+				modifyingTool |= gb.Seen(axisLetters[axis]);
 			}
-		}
-		else
-		{
-			if (!LockMovement(gb))
+
+			if (modifyingTool)
 			{
-				return false;
+				if (!SetOrReportOffsets(gb, reply))
+				{
+					return false;
+				}
 			}
-			result = RetractFilament(gb, true);
+			else
+			{
+				if (!LockMovement(gb))
+				{
+					return false;
+				}
+				result = RetractFilament(gb, true);
+			}
 		}
 		break;
 
@@ -3216,6 +3227,18 @@ bool GCodes::HandleMcode(GCodeBuffer& gb, StringRef& reply)
 		}
 		break;
 #endif
+
+	case 591: // Load filament
+		result = LoadFilament(gb, reply, error);
+		break;
+
+	case 592: // Unload filament
+		result = UnloadFilament(gb, reply, error);
+		break;
+
+	case 593: // Configure filament properties
+		// TODO: We may need this code later to restrict specific filaments to certain tools or to reset filament counters.
+		break;
 
 	case 665: // Set delta configuration
 		if (!LockMovementAndWaitForStandstill(gb))

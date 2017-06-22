@@ -251,6 +251,8 @@ private:
 
 	void ClearBabyStepping();
 
+	MessageType GetMessageBoxDevice(GCodeBuffer& gb) const;				// Decide which device to display a message box on
+
 	static uint32_t LongArrayToBitMap(const long *arr, size_t numEntries);	// Convert an array of longs to a bit map
 
 	Platform& platform;													// The RepRap machine

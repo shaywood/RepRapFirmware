@@ -50,6 +50,8 @@ const float LONG_TIME = 300.0;						// Seconds
 const uint32_t MinimumWarningInterval = 4000;		// Milliseconds
 const uint32_t FanCheckInterval = 500;				// Milliseconds
 const uint32_t DriverCoolingTimeout = 4000;			// Milliseconds
+const float DefaultMessageTimeout = 10.0;			// How long a message is displayed by default, in seconds
+
 
 // FanCheckInterval must be lower than MinimumWarningInterval to avoid giving driver over temperature warnings too soon when thermostatic control of electronics cooling fans is used
 static_assert(FanCheckInterval < MinimumWarningInterval, "FanCheckInterval too large");
@@ -163,7 +165,7 @@ const size_t PASSWORD_LENGTH = 20;
 
 const size_t GCODE_LENGTH = 100;
 const size_t GCODE_REPLY_LENGTH = 2048;
-const size_t MESSAGE_LENGTH = 256;
+const size_t MESSAGE_LENGTH = 90;
 
 const size_t FILENAME_LENGTH = 100;
 

@@ -67,7 +67,8 @@ public:
 		axesRelative : 1,
 		doingFileMacro : 1,
 		waitWhileCooling : 1,
-		runningM502 : 1;
+		runningM502 : 1,
+		waitingForAcknowledgement : 1;
 
 	static GCodeMachineState *Allocate()
 	post(!result.IsLive(); result.state == GCodeState::normal);

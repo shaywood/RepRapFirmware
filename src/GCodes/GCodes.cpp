@@ -2133,6 +2133,18 @@ bool GCodes::SetSingleZProbeAtAPosition(GCodeBuffer& gb, StringRef& reply)
 	return false;
 }
 
+// Decide which device to display a message box on
+MessageType GCodes::GetMessageBoxDevice(GCodeBuffer& gb) const
+{
+	MessageType mt = gb.GetResponseMessageType();
+	if (mt == GENERIC_MESSAGE)
+	{
+		// Command source was the file being printed, or a trigger. Send the message to PanelDue if there is one, else to the web server.
+		mt = (lastAuxStatusReportType >= 0) ? AUX_MESSAGE : HTTP_MESSAGE;
+	}
+	return mt;
+}
+
 // Set or print the Z probe. Called by G31.
 // Note that G31 P or G31 P0 prints the parameters of the currently-selected Z probe.
 bool GCodes::SetPrintZProbe(GCodeBuffer& gb, StringRef& reply)

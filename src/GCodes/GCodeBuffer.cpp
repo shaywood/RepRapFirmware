@@ -635,4 +635,28 @@ bool GCodeBuffer::IsDoingFileMacro() const
 	return machineState->doingFileMacro;
 }
 
+// Check if any of the machine states is waiting for a message to be acknowledged while
+// taking into account that this input source may have started a macro file in the meantime
+bool GCodeBuffer::IsWaitingForMessageAcknowledgement() const
+{
+	for (GCodeMachineState *ms = machineState; ms != nullptr; ms = ms->previous)
+	{
+		if (ms->waitingForAcknowledgement)
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+// Tell this input source that any message it sent and is waiting on has been acknowledged
+// Allow for the possibility that the source may have started running a macro since it started waiting
+void GCodeBuffer::MessageAcknowledged()
+{
+	for (GCodeMachineState *ms = machineState; ms != nullptr; ms = ms->previous)
+	{
+		ms->waitingForAcknowledgement = false;
+	}
+}
+
 // End

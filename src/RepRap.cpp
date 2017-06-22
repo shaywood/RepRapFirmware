@@ -50,6 +50,7 @@ RepRap::RepRap() : toolList(nullptr), currentTool(nullptr), lastWarningMillis(0)
 	SetPassword(DEFAULT_PASSWORD);
 	SetName(DEFAULT_NAME);
 	message[0] = 0;
+	displayMessageBox = false;
 }
 
 void RepRap::Init()
@@ -575,11 +576,19 @@ OutputBuffer *RepRap::GetStatusResponse(uint8_t type, ResponseSource source)
 	const int toolNumber = (currentTool == nullptr) ? -1 : currentTool->Number();
 	response->catf("]},\"currentTool\":%d", toolNumber);
 
-	// Output - only reported once
+	// Output notifications
 	{
-		bool sendBeep = (beepDuration != 0 && beepFrequency != 0);
+		bool sendBeep = ((source == ResponseSource::AUX || !platform->HaveAux()) && beepDuration != 0 && beepFrequency != 0);
 		bool sendMessage = (message[0] != 0);
-		if (sendBeep || sendMessage)
+
+		float timeLeft = 0.0;
+		if (displayMessageBox && boxTimer != 0)
+		{
+			timeLeft = (float)(boxTimeout) / 1000.0 - (float)(millis() - boxTimer) / 1000.0;
+			displayMessageBox = (timeLeft > 0.0);
+		}
+
+		if (sendBeep || sendMessage || displayMessageBox)
 		{
 			response->cat(",\"output\":{");
 
@@ -599,7 +608,22 @@ OutputBuffer *RepRap::GetStatusResponse(uint8_t type, ResponseSource source)
 			{
 				response->cat("\"message\":");
 				response->EncodeString(message, ARRAY_SIZE(message), false);
+				if (displayMessageBox)
+				{
+					response->cat(",");
+				}
 				message[0] = 0;
+			}
+
+			// Report message box
+			if (displayMessageBox)
+			{
+				response->cat("\"msgBox\":{\"msg\":");
+				response->EncodeString(boxMessage, ARRAY_SIZE(boxMessage), false);
+				response->cat(",\"title\":");
+				response->EncodeString(boxTitle, ARRAY_SIZE(boxTitle), false);
+				response->catf(",\"needsAck\":%d,\"timeout\":%.1f,\"showZ\":%d}",
+						boxNeedsAcknowledgement ? 1 : 0, timeLeft, boxZControls ? 1 : 0);
 			}
 			response->cat("}");
 		}
@@ -1507,6 +1531,24 @@ void RepRap::SetMessage(const char *msg)
 	{
 		platform->SendAuxMessage(msg);
 	}
+}
+
+// Display a message box on the web interface
+void RepRap::SetAlert(const char *msg, const char *title, bool needsAcknowledgement, float timeout, bool showZControls)
+{
+	SafeStrncpy(boxMessage, msg, ARRAY_SIZE(boxMessage));
+	SafeStrncpy(boxTitle, title, ARRAY_SIZE(boxTitle));
+	boxNeedsAcknowledgement = needsAcknowledgement;
+	boxTimer = (needsAcknowledgement || timeout <= 0.0) ? 0 : millis();
+	boxTimeout = round(timeout * 1000.0);
+	boxZControls = showZControls;
+	displayMessageBox = true;
+}
+
+// Clear pending message box
+void RepRap::ClearAlert()
+{
+	displayMessageBox = false;
 }
 
 // Get the status character for the new-style status response

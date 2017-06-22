@@ -65,6 +65,9 @@ public:
 	const char *GetIdentity() const { return identity; }
 	const bool CanQueueCodes() const { return queueCodes; }
 
+	bool IsWaitingForMessageAcknowledgement() const;
+	void MessageAcknowledged();
+
 	uint32_t whenTimerStarted;							// when we started waiting
 	bool timerRunning;									// true if we are waiting
 

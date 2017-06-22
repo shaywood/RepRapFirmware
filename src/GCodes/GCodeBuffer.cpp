@@ -218,42 +218,6 @@ bool GCodeBuffer::Seen(char c)
 	return false;
 }
 
-// As Seen but require a space before the letter. Needed when there are string parameters in the command.
-bool GCodeBuffer::SeenAfterSpace(char c)
-{
-	readPointer = 0;
-	bool seenSpace = false;
-	bool inQuotes = false;
-	for (;;)
-	{
-		const char b = gcodeBuffer[readPointer];
-		if (b == 0)
-		{
-			break;
-		}
-		if (b == '"')
-		{
-			inQuotes = !inQuotes;
-			seenSpace = false;
-		}
-		else if (!inQuotes)
-		{
-			if (b == c && seenSpace)
-			{
-				return true;
-			}
-			if (b == ';' )
-			{
-				break;
-			}
-			seenSpace = (b == ' ');
-		}
-		++readPointer;
-	}
-	readPointer = -1;
-	return false;
-}
-
 // Return the first G, M or T command letter. Needed so that we don't pick up a spurious command letter form inside a string parameter.
 char GCodeBuffer::GetCommandLetter()
 {
@@ -606,11 +570,15 @@ bool GCodeBuffer::PushState()
 	GCodeMachineState * const ms = GCodeMachineState::Allocate();
 	ms->previous = machineState;
 	ms->feedrate = machineState->feedrate;
+	ms->fileState.CopyFrom(machineState->fileState);
+	ms->lockedResources = machineState->lockedResources;
 	ms->drivesRelative = machineState->drivesRelative;
 	ms->axesRelative = machineState->axesRelative;
 	ms->doingFileMacro = machineState->doingFileMacro;
-	ms->fileState.CopyFrom(machineState->fileState);
-	ms->lockedResources = machineState->lockedResources;
+	ms->waitWhileCooling = machineState->waitWhileCooling;
+	ms->runningM502 = machineState->runningM502;
+	ms->messageAcknowledged = false;
+	ms->waitingForAcknowledgement = false;
 	machineState = ms;
 	return true;
 }
@@ -621,6 +589,8 @@ bool GCodeBuffer::PopState()
 	GCodeMachineState * const ms = machineState;
 	if (ms->previous == nullptr)
 	{
+		ms->messageAcknowledged = false;			// avoid getting stuck in a loop trying to pop
+		ms->waitingForAcknowledgement = false;
 		return false;
 	}
 
@@ -635,27 +605,17 @@ bool GCodeBuffer::IsDoingFileMacro() const
 	return machineState->doingFileMacro;
 }
 
-// Check if any of the machine states is waiting for a message to be acknowledged while
-// taking into account that this input source may have started a macro file in the meantime
-bool GCodeBuffer::IsWaitingForMessageAcknowledgement() const
-{
-	for (GCodeMachineState *ms = machineState; ms != nullptr; ms = ms->previous)
-	{
-		if (ms->waitingForAcknowledgement)
-		{
-			return true;
-		}
-	}
-	return false;
-}
-
 // Tell this input source that any message it sent and is waiting on has been acknowledged
 // Allow for the possibility that the source may have started running a macro since it started waiting
 void GCodeBuffer::MessageAcknowledged()
 {
 	for (GCodeMachineState *ms = machineState; ms != nullptr; ms = ms->previous)
 	{
-		ms->waitingForAcknowledgement = false;
+		if (ms->waitingForAcknowledgement)
+		{
+			ms->waitingForAcknowledgement = false;
+			ms->messageAcknowledged = true;
+		}
 	}
 }
 

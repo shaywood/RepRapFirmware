@@ -24,7 +24,6 @@ public:
 	bool Put(const char *str, size_t len);				// Add an entire string
 	bool IsEmpty() const;								// Does this buffer contain any code?
 	bool Seen(char c);									// Is a character present?
-	bool SeenAfterSpace(char c);						// Is a character present?
 
 	char GetCommandLetter();							// Find the first G, M or T command
 	float GetFValue();									// Get a float after a key letter
@@ -64,8 +63,6 @@ public:
 	void AdvanceState();
 	const char *GetIdentity() const { return identity; }
 	const bool CanQueueCodes() const { return queueCodes; }
-
-	bool IsWaitingForMessageAcknowledgement() const;
 	void MessageAcknowledged();
 
 	uint32_t whenTimerStarted;							// when we started waiting

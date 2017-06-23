@@ -1749,17 +1749,33 @@ bool GCodes::HandleMcode(GCodeBuffer& gb, StringRef& reply)
 			gb.TryGetQuotedString('P', messageBuffer, ARRAY_SIZE(messageBuffer), seen);
 			if (seen)
 			{
-				int32_t sParam = 0;
+				int32_t sParam = 1;
 				gb.TryGetIValue('S', sParam, seen);
-				float tParam = DefaultMessageTimeout;
-				gb.TryGetFValue('T', tParam, seen);
+				if (sParam < 0 || sParam > 3)
+				{
+					reply.copy("Invalid message box mode");
+					error = true;
+					break;
+				}
+
+				float tParam;
+				if (sParam == 0 || sParam == 1)
+				{
+					tParam = DefaultMessageTimeout;
+					gb.TryGetFValue('T', tParam, seen);
+				}
+				else
+				{
+					tParam = 0.0;
+				}
+
 				int32_t zParam = 0;
 				gb.TryGetIValue('Z', zParam, seen);
 
 				const MessageType mt = GetMessageBoxDevice(gb);						// get the display device
 
 				// If we need to wait for an acknowledgement, save the state and set waiting
-				if (sParam == 1 && Push(gb))										// stack the machine state including the file position
+				if ((sParam == 2 || sParam == 3) && Push(gb))						// stack the machine state including the file position
 				{
 					gb.MachineState().fileState.Close();							// stop reading from file
 					gb.MachineState().waitingForAcknowledgement = true;				// flag that we are waiting for acknowledgement
@@ -1771,12 +1787,16 @@ bool GCodes::HandleMcode(GCodeBuffer& gb, StringRef& reply)
 		break;
 
 	case 292:	// Acknowledge message
-		reprap.ClearAlert();
-		for (GCodeBuffer* targetGb : gcodeSources)
 		{
-			if (targetGb != nullptr)
+			reprap.ClearAlert();
+
+			const bool cancelled = (gb.Seen('P') && gb.GetIValue() == 1);
+			for (GCodeBuffer* targetGb : gcodeSources)
 			{
-				targetGb->MessageAcknowledged();
+				if (targetGb != nullptr)
+				{
+					targetGb->MessageAcknowledged(cancelled);
+				}
 			}
 		}
 		break;

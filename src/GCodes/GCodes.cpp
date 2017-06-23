@@ -246,7 +246,15 @@ void GCodes::Spin()
 	{
 		if (gb.MachineState().messageAcknowledged)
 		{
+			const bool wasCancelled = gb.MachineState().messageCancelled;
 			Pop(gb);
+			if (wasCancelled)
+			{
+				// The user wishes to cancel the current operation.
+				// Let the G-Code processor deal with this request
+				const char *mCode = gb.IsDoingFileMacro() ? "M99\n" : "M0\n";
+				gb.Put(mCode, strlen(mCode));
+			}
 		}
 		else
 		{
@@ -1764,8 +1772,9 @@ bool GCodes::DoFileMacro(GCodeBuffer& gb, const char* fileName, bool reportMissi
 
 void GCodes::FileMacroCyclesReturn(GCodeBuffer& gb)
 {
-	if (gb.MachineState().doingFileMacro)
+	if (gb.IsDoingFileMacro())
 	{
+		gb.MachineState().fileState.Close();
 		gb.PopState();
 		gb.Init();
 	}

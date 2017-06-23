@@ -2858,7 +2858,7 @@ void Platform::SendAlert(MessageType mt, const char *message, const char *title,
 
 	case HTTP_MESSAGE:
 		// Make the RepRap class cache this message until it's picked up by the HTTP clients
-		reprap.SetAlert(message, title, sParam == 1, tParam, zParam);
+		reprap.SetAlert(message, title, sParam, tParam, zParam);
 		break;
 
 	default:

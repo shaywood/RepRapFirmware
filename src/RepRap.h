@@ -99,7 +99,7 @@ public:
 
 	void Beep(int freq, int ms);
 	void SetMessage(const char *msg);
-	void SetAlert(const char *msg, const char *title, bool needsAcknowledgement, float timeout, bool showZControls);
+	void SetAlert(const char *msg, const char *title, int mode, float timeout, bool showZControls);
 	void ClearAlert();
 
 	static void CopyParameterText(const char* src, char *dst, size_t length);
@@ -150,7 +150,7 @@ private:
 
 	bool displayMessageBox;
 	char boxMessage[MESSAGE_LENGTH + 1], boxTitle[MESSAGE_LENGTH + 1];
-	bool boxNeedsAcknowledgement;
+	int boxMode;
 	uint32_t boxTimer, boxTimeout;
 	bool boxZControls;
 };

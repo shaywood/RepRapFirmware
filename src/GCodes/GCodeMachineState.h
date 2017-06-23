@@ -78,7 +78,8 @@ public:
 		waitWhileCooling : 1,
 		runningM502 : 1,
 		waitingForAcknowledgement : 1,
-		messageAcknowledged : 1;
+		messageAcknowledged : 1,
+		messageCancelled : 1;
 
 	static GCodeMachineState *Allocate()
 	post(!result.IsLive(); result.state == GCodeState::normal);

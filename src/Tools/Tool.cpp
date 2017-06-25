@@ -83,6 +83,7 @@ Tool * Tool::freelist = nullptr;
 		// and only if this tool is assigned to exactly one extruder
 		Filament *filament = Filament::GetFilamentByExtruder(d[0]);
 		t->filament = (filament == nullptr) ? new Filament(d[0]) : filament;
+		t->filament->LoadAssignment();
 	}
 	else
 	{
@@ -125,7 +126,6 @@ Tool * Tool::freelist = nullptr;
 		t->standbyTemperatures[heater] = ABS_ZERO;
 	}
 
-	t->GetFilament()->LoadAssignment();
 	return t;
 }
 
@@ -134,7 +134,6 @@ Tool * Tool::freelist = nullptr;
 	if (t != nullptr)
 	{
 		t->filament = nullptr;
-
 		t->next = freelist;
 		freelist = t;
 	}

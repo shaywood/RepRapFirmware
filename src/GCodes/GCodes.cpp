@@ -38,10 +38,10 @@
 #include "FirmwareUpdater.h"
 #endif
 
-const char GCodes::axisLetters[MaxAxes] = AXES_('X', 'Y', 'Z', 'U', 'V', 'W');
+const char GCodes::axisLetters[MaxAxes] = AXES_('X', 'Y', 'Z', 'U', 'V', 'W', 'A', 'B', 'C');
 
 const char* const PAUSE_G = "pause.g";
-const char* const HomingFileNames[MaxAxes] = AXES_("homex.g", "homey.g", "homez.g", "homeu.g", "homev.g", "homew.g");
+const char* const HomingFileNames[MaxAxes] = AXES_("homex.g", "homey.g", "homez.g", "homeu.g", "homev.g", "homew.g", "homea.g", "homeb.g", "homec.g");
 const char* const HOME_ALL_G = "homeall.g";
 const char* const HOME_DELTA_G = "homedelta.g";
 const char* const DefaultHeightMapFile = "heightmap.csv";
@@ -2025,7 +2025,7 @@ void GCodes::DoManualProbe(GCodeBuffer& gb)
 		gb.MachineState().fileState.Close();							// stop reading from file
 		gb.MachineState().waitingForAcknowledgement = true;				// flag that we are waiting for acknowledgement
 		const MessageType mt = GetMessageBoxDevice(gb);
-		platform.SendAlert(mt, "Adjust height until the nozzle just touched the bed, then press OK", "", 1, 0.0, true);
+		platform.SendAlert(mt, "Adjust height until the nozzle just touches the bed, then press OK", "Manual bed probing", 2, 0.0, true);
 	}
 }
 

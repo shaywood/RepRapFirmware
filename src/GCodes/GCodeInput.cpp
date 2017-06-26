@@ -265,6 +265,15 @@ void FileGCodeInput::Reset()
 	RegularGCodeInput::Reset();
 }
 
+// Reset this input. Should be called when a specific G-code or macro file is closed outside of the reading context
+void FileGCodeInput::Reset(const FileData &file)
+{
+	if (file.f == lastFile)
+	{
+		Reset();
+	}
+}
+
 // Read another chunk of G-codes from the file and return true if more data is available
 bool FileGCodeInput::ReadFromFile(FileData &file)
 {

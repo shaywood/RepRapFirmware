@@ -248,12 +248,17 @@ void GCodes::Spin()
 		{
 			const bool wasCancelled = gb.MachineState().messageCancelled;
 			Pop(gb);
+
 			if (wasCancelled)
 			{
-				// The user wishes to cancel the current operation.
-				// Let the G-Code processor deal with this request
-				const char *mCode = gb.IsDoingFileMacro() ? "M99\n" : "M0\n";
-				gb.Put(mCode, strlen(mCode));
+				if (gb.MachineState().previous == nullptr)
+				{
+					CancelPrint();
+				}
+				else
+				{
+					FileMacroCyclesReturn(gb);
+				}
 			}
 		}
 		else
@@ -1790,7 +1795,10 @@ void GCodes::FileMacroCyclesReturn(GCodeBuffer& gb)
 {
 	if (gb.IsDoingFileMacro())
 	{
-		gb.MachineState().fileState.Close();
+		FileData &file = gb.MachineState().fileState;
+		fileInput->Reset(file);
+		file.Close();
+
 		gb.PopState();
 		gb.Init();
 	}
@@ -3327,10 +3335,11 @@ void GCodes::CancelPrint()
 	segmentsLeft = 0;
 	isPaused = false;
 
-	fileInput->Reset();
+	FileData& fileBeingPrinted = fileGCode->OriginalMachineState().fileState;
+
+	fileInput->Reset(fileBeingPrinted);
 	fileGCode->Init();
 
-	FileData& fileBeingPrinted = fileGCode->OriginalMachineState().fileState;
 	if (fileBeingPrinted.IsLive())
 	{
 		fileBeingPrinted.Close();

@@ -161,19 +161,9 @@ inline int8_t Heat::GetBedHeater() const
 	return bedHeater;
 }
 
-inline void Heat::SetBedHeater(int8_t heater)
-{
-	bedHeater = heater;
-}
-
 inline int8_t Heat::GetChamberHeater() const
 {
 	return chamberHeater;
-}
-
-inline void Heat::SetChamberHeater(int8_t heater)
-{
-	chamberHeater = heater;
 }
 
 // Get the process model for the specified heater

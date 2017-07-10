@@ -1,1 +1,1 @@
-../../../../DuetWiFiSocketServer/src/include/MessageFormats.h
+/home/christian/duet/DuetWiFiSocketServer/include/MessageFormats.h

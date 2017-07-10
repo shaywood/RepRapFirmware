@@ -51,6 +51,25 @@ void Heat::ResetHeaterModels()
 	}
 }
 
+void Heat::SetBedHeater(int8_t heater)
+{
+	if (bedHeater >= 0)
+	{
+		pids[bedHeater]->SwitchOff();
+	}
+	bedHeater = heater;
+}
+
+void Heat::SetChamberHeater(int8_t heater)
+{
+	if (chamberHeater >= 0)
+	{
+		pids[chamberHeater]->SwitchOff();
+	}
+	chamberHeater = heater;
+}
+
+
 void Heat::Init()
 {
 	// Set up the real heaters and the corresponding PIDs

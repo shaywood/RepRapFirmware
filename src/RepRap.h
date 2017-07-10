@@ -61,7 +61,7 @@ public:
 	Tool* GetCurrentTool() const;
 	Tool* GetTool(int toolNumber) const;
 	Tool* GetCurrentOrDefaultTool() const;
-	const Tool* GetFirstTool() const { return toolList; }						// Return the lowest-numbered tool
+	const Tool* GetFirstTool() const { return toolList; }				// Return the lowest-numbered tool
 	uint32_t GetCurrentXAxes() const;									// Get the current axes used as X axes
 	void SetToolVariables(int toolNumber, const float* standbyTemperatures, const float* activeTemperatures);
 	bool IsHeaterAssignedToTool(int8_t heater) const;

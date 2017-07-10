@@ -1210,9 +1210,6 @@ bool GCodes::HandleMcode(GCodeBuffer& gb, StringRef& reply)
 				{
 					// Make sure we stay within reasonable boundaries...
 					bedHeater = -1;
-
-					// If we're disabling the hot bed, make sure the old heater is turned off
-					heat.SwitchOff(heat.GetBedHeater());
 				}
 				else if (bedHeater >= (int)Heaters)
 				{
@@ -1270,12 +1267,6 @@ bool GCodes::HandleMcode(GCodeBuffer& gb, StringRef& reply)
 				int heater = gb.GetIValue();
 				if (heater < 0)
 				{
-					const int8_t currentHeater = heat.GetChamberHeater();
-					if (currentHeater != -1)
-					{
-						heat.SwitchOff(currentHeater);
-					}
-
 					heat.SetChamberHeater(-1);
 				}
 				else if (heater < (int)Heaters)

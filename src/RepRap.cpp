@@ -719,22 +719,44 @@ OutputBuffer *RepRap::GetStatusResponse(uint8_t type, ResponseSource source)
 		const int8_t bedHeater = heat->GetBedHeater();
 		if (bedHeater != -1)
 		{
-			response->catf("\"bed\":{\"current\":%.1f,\"active\":%.1f,\"state\":%d},",
+			response->catf("\"bed\":{\"current\":%.1f,\"active\":%.1f,\"state\":%d,\"heater\":%d},",
 					heat->GetTemperature(bedHeater), heat->GetActiveTemperature(bedHeater),
-					heat->GetStatus(bedHeater));
+					heat->GetStatus(bedHeater), bedHeater);
 		}
 
 		/* Chamber */
 		const int8_t chamberHeater = heat->GetChamberHeater();
 		if (chamberHeater != -1)
 		{
-			response->catf("\"chamber\":{\"current\":%.1f,", heat->GetTemperature(chamberHeater));
-			response->catf("\"active\":%.1f,", heat->GetActiveTemperature(chamberHeater));
-			response->catf("\"state\":%d},", static_cast<int>(heat->GetStatus(chamberHeater)));
+			response->catf("\"chamber\":{\"current\":%.1f,\"active\":%.1f,\"state\":%d,\"heater\":%d},",
+					heat->GetTemperature(chamberHeater), heat->GetActiveTemperature(chamberHeater),
+					heat->GetStatus(chamberHeater), chamberHeater);
 		}
 
-		/* Heads */
-		response->cat("\"heads\":{\"current\":");
+		/* Heaters */
+
+		// Current temperatures
+		response->cat("\"current\":");
+		ch = '[';
+		for (size_t heater = 0; heater < Heaters; heater++)
+		{
+			response->catf("%c%.1f", ch, heat->GetTemperature(heater));
+			ch = ',';
+		}
+		response->cat((ch == '[') ? "[]" : "]");
+
+		// Current states
+		response->cat(",\"state\":");
+		ch = '[';
+		for (size_t heater = 0; heater < Heaters; heater++)
+		{
+			response->catf("%c%d", ch, heat->GetStatus(heater));
+			ch = ',';
+		}
+		response->cat((ch == '[') ? "[]" : "]");
+
+		/* Heads - NOTE: This field is subject to deprecation and will be removed in v1.20 */
+		/*response->cat(",\"heads\":{\"current\":");
 
 		// Current temperatures
 		ch = '[';
@@ -773,10 +795,10 @@ OutputBuffer *RepRap::GetStatusResponse(uint8_t type, ResponseSource source)
 			response->catf("%c%d", ch, static_cast<int>(heat->GetStatus(heater)));
 			ch = ',';
 		}
-		response->cat((ch == '[') ? "[]" : "]");
+		response->cat((ch == '[') ? "[]" : "]");*/
 
 		/* Tool temperatures */
-		response->cat("},\"tools\":{\"active\":[");
+		response->cat(/*"}*/",\"tools\":{\"active\":[");
 		for (const Tool *tool = toolList; tool != nullptr; tool = tool->Next())
 		{
 			ch = '[';

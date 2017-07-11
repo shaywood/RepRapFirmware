@@ -760,7 +760,7 @@ OutputBuffer *RepRap::GetStatusResponse(uint8_t type, ResponseSource source)
 		response->cat((ch == '[') ? "[]" : "]");
 
 		/* Heads - NOTE: This field is subject to deprecation and will be removed in v1.20 */
-		/*response->cat(",\"heads\":{\"current\":");
+		response->cat(",\"heads\":{\"current\":");
 
 		// Current temperatures
 		ch = '[';
@@ -799,10 +799,10 @@ OutputBuffer *RepRap::GetStatusResponse(uint8_t type, ResponseSource source)
 			response->catf("%c%d", ch, static_cast<int>(heat->GetStatus(heater)));
 			ch = ',';
 		}
-		response->cat((ch == '[') ? "[]" : "]");*/
+		response->cat((ch == '[') ? "[]" : "]");
 
 		/* Tool temperatures */
-		response->cat(/*"}*/",\"tools\":{\"active\":[");
+		response->cat("},\"tools\":{\"active\":[");
 		for (const Tool *tool = toolList; tool != nullptr; tool = tool->Next())
 		{
 			ch = '[';

@@ -131,6 +131,9 @@ void RepRap::Init()
 
 void RepRap::Exit()
 {
+#if !defined(__RADDS__) && !defined(__ALLIGATOR__)
+	hsmci_set_idle_func(nullptr);
+#endif
 	active = false;
 	heat->Exit();
 	move->Exit();

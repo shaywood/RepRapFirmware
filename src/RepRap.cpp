@@ -106,7 +106,7 @@ void RepRap::Init()
 	{
 		while (gCodes->IsDaemonBusy())
 		{
-			// GCodes::Spin will read the macro and ensure DoingFileMacro returns false when it's done
+			// GCodes::Spin will read the macro and ensure IsDaemonBusy returns false when it's done
 			Spin();
 		}
 		platform->Message(HOST_MESSAGE, "Done!\n");

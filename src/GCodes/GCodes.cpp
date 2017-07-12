@@ -196,7 +196,14 @@ void GCodes::Reset()
 
 bool GCodes::DoingFileMacro() const
 {
-	return fileGCode->IsDoingFileMacro();
+	for (const GCodeBuffer *gb : gcodeSources)
+	{
+		if (gb->IsDoingFileMacro())
+		{
+			return true;
+		}
+	}
+	return false;
 }
 
 float GCodes::FractionOfFilePrinted() const

@@ -81,7 +81,7 @@ bool GCodeBuffer::Put(char c)
 		++commandLength;
 	}
 
-	if (!inQuotes && c == ';')
+	if (!inQuotes && ((c == ';') || (gcodePointer == 0 && c == '(')))
 	{
 		inComment = true;
 	}

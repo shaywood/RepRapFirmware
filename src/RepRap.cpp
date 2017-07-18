@@ -1663,7 +1663,6 @@ char RepRap::GetStatusCharacter() const
 			: (gCodes->IsDoingToolChange())								? 'T'	// Changing tool
 			: (gCodes->IsPaused()) 										? 'S'	// Paused / Stopped
 			: (printMonitor->IsPrinting())								? 'P'	// Printing
-			: (gCodes->IsDoingToolChange())								? 'T'	// Changing tool
 			: (gCodes->DoingFileMacro() || !move->NoLiveMovement()) 	? 'B'	// Busy
 			: 'I';																// Idle
 }

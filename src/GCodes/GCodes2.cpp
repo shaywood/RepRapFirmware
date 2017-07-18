@@ -2918,7 +2918,8 @@ bool GCodes::HandleMcode(GCodeBuffer& gb, StringRef& reply)
 			}
 			else
 			{
-				platform.Message(GENERIC_MESSAGE, "Trigger number out of range\n");
+				reply.copy("Trigger number out of range");
+				error = true;
 			}
 		}
 		break;
@@ -2998,7 +2999,7 @@ bool GCodes::HandleMcode(GCodeBuffer& gb, StringRef& reply)
 
 			if (badDrive)
 			{
-				reply.copy("Error: invalid drive number in M584 command\n");
+				reply.copy("Invalid drive number in M584 command");
 				error = true;
 			}
 			else
@@ -3013,7 +3014,7 @@ bool GCodes::HandleMcode(GCodeBuffer& gb, StringRef& reply)
 					}
 					else
 					{
-						reply.copy("Error: invalid number of visible axes in M584 command\n");
+						reply.copy("Invalid number of visible axes in M584 command");
 						error = true;
 					}
 				}

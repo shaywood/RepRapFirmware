@@ -69,11 +69,10 @@ void Heat::SetChamberHeater(int8_t heater)
 	chamberHeater = heater;
 }
 
-
 void Heat::Init()
 {
 	// Set up the real heaters and the corresponding PIDs
-	for (size_t heater : ARRAY_INDICES(pids))
+	for (size_t heater = 0; heater < Heaters; ++heater)
 	{
 		heaterSensors[heater] = nullptr;			// no temperature sensor assigned yet
 		if ((int)heater == DefaultBedHeater || (int)heater == DefaultChamberHeater)
@@ -91,6 +90,7 @@ void Heat::Init()
 		{
 			pids[heater]->Init(DefaultHotEndHeaterGain, DefaultHotEndHeaterTimeConstant, DefaultHotEndHeaterDeadTime, DefaultExtruderTemperatureLimit, true);
 		}
+		lastStandbyTools[heater] = nullptr;
 	}
 
 	// Set up the virtual heaters
@@ -101,7 +101,7 @@ void Heat::Init()
 	}
 
 	// Set up default virtual heaters for MCU temperature and TMC driver overheat sensors
-#ifndef __RADDS
+#ifndef __RADDS__
 	virtualHeaterSensors[0] = TemperatureSensor::Create(CpuTemperatureSenseChannel);
 	virtualHeaterSensors[0]->SetHeaterName("MCU");				// name this virtual heater so that it appears in DWC
 #endif
@@ -272,6 +272,7 @@ void Heat::SwitchOff(int8_t heater)
 	if (heater >= 0 && heater < (int)Heaters)
 	{
 		pids[heater]->SwitchOff();
+		lastStandbyTools[heater] = nullptr;
 	}
 }
 
@@ -283,11 +284,12 @@ void Heat::SwitchOffAll()
 	}
 }
 
-void Heat::Standby(int8_t heater)
+void Heat::Standby(int8_t heater, const Tool *tool)
 {
 	if (heater >= 0 && heater < (int)Heaters)
 	{
 		pids[heater]->Standby();
+		lastStandbyTools[heater] = tool;
 	}
 }
 

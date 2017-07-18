@@ -269,6 +269,7 @@ void Network::Spin(bool full)
 	{
 	case NetworkState::enabled:
 	case NetworkState::disabled:
+	default:
 		// Nothing to do
 		break;
 
@@ -465,7 +466,7 @@ void Network::SetHostname(const char *name)
 		}
 	}
 
-	if (i > 0)
+	if (i != 0)
 	{
 		hostname[i] = 0;
 	}

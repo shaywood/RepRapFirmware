@@ -747,7 +747,7 @@ int Platform::GetZProbeSecondaryValues(int& v1, int& v2)
 	return 0;
 }
 
-void Platform::SetZProbeAxes(uint32_t axes)
+void Platform::SetZProbeAxes(AxesBitmap axes)
 {
 	zProbeAxes = axes;
 }
@@ -2722,7 +2722,7 @@ FileStore* Platform::GetFileStore(const char* directory, const char* fileName, b
 		}
 	}
 	Message(HOST_MESSAGE, "Max open file count exceeded.\n");
-	return NULL;
+	return nullptr;
 }
 
 void Platform::AppendAuxReply(const char *msg)

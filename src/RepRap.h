@@ -59,7 +59,7 @@ public:
 	void SelectTool(int toolNumber);
 	void StandbyTool(int toolNumber);
 	Tool* GetCurrentTool() const;
-	Tool* GetLastStandbyTool() const { return lastStandbyTool; }
+	Tool* GetLastStandbyTool(int heater) const { return lastStandbyTools[heater]; }
 	Tool* GetTool(int toolNumber) const;
 	Tool* GetCurrentOrDefaultTool() const;
 	const Tool* GetFirstTool() const { return toolList; }				// Return the lowest-numbered tool
@@ -133,7 +133,7 @@ private:
 
 	Tool* toolList;								// the tool list is sorted in order of increasing tool number
 	Tool* currentTool;
-	Tool* lastStandbyTool;
+	Tool* lastStandbyTools[Heaters];
 	uint32_t lastWarningMillis;					// When we last sent a warning message for things that can happen very often
 
 	uint16_t activeExtruders;

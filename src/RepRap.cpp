@@ -38,7 +38,7 @@ extern "C" void hsmciIdle()
 
 // Do nothing more in the constructor; put what you want in RepRap:Init()
 
-RepRap::RepRap() : toolList(nullptr), currentTool(nullptr), lastStandbyTool(nullptr), lastWarningMillis(0), activeExtruders(0),
+RepRap::RepRap() : toolList(nullptr), currentTool(nullptr), lastWarningMillis(0), activeExtruders(0),
 	activeToolHeaters(0), ticksInSpinState(0), spinningModule(noModule), debug(0), stopped(false),
 	active(false), resetting(false), processingConfig(true), beepFrequency(0), beepDuration(0)
 {
@@ -65,6 +65,8 @@ RepRap::RepRap() : toolList(nullptr), currentTool(nullptr), lastStandbyTool(null
 	SetName(DEFAULT_NAME);
 	message[0] = 0;
 	displayMessageBox = false;
+
+	memset(lastStandbyTools, 0, sizeof(lastStandbyTools));
 }
 
 void RepRap::Init()
@@ -357,10 +359,15 @@ void RepRap::DeleteTool(Tool* tool)
 		SelectTool(-1);
 	}
 
-	// Switch off any associated heater
+	// Switch off any associated heater and remove heater references
 	for (size_t i = 0; i < tool->HeaterCount(); i++)
 	{
-		reprap.GetHeat().SwitchOff(tool->Heater(i));
+		const int heater = tool->Heater(i);
+		reprap.GetHeat().SwitchOff(heater);
+		if (lastStandbyTools[heater] == tool)
+		{
+			lastStandbyTools[heater] = nullptr;
+		}
 	}
 
 	// Purge any references to this tool
@@ -427,7 +434,10 @@ void RepRap::StandbyTool(int toolNumber)
 	if (tool != nullptr)
 	{
 		tool->Standby();
-		lastStandbyTool = tool;
+		for (size_t i = 0; i < tool->HeaterCount(); i++)
+		{
+			lastStandbyTools[tool->Heater(i)] = tool;
+		}
 		if (currentTool == tool)
 		{
 			currentTool = nullptr;

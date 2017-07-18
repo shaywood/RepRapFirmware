@@ -353,6 +353,7 @@ void Tool::SetVariables(const float* standby, const float* active)
 			if (active[heater] < temperatureLimit)
 			{
 				activeTemperatures[heater] = active[heater];
+
 				if (currentTool == nullptr || currentTool == this)
 				{
 					reprap.GetHeat().SetActiveTemperature(heaters[heater], activeTemperatures[heater]);
@@ -361,7 +362,9 @@ void Tool::SetVariables(const float* standby, const float* active)
 			if (standby[heater] < temperatureLimit)
 			{
 				standbyTemperatures[heater] = standby[heater];
-				if (currentTool == nullptr || currentTool == this || reprap.GetLastStandbyTool() == this)
+
+				const Tool *lastStandbyTool = reprap.GetLastStandbyTool(heaters[heater]);
+				if (currentTool == nullptr || currentTool == this || lastStandbyTool == nullptr || lastStandbyTool == this)
 				{
 					reprap.GetHeat().SetStandbyTemperature(heaters[heater], standbyTemperatures[heater]);
 				}

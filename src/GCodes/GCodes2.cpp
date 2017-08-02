@@ -1736,8 +1736,14 @@ bool GCodes::HandleMcode(GCodeBuffer& gb, StringRef& reply)
 					tParam = 0.0;
 				}
 
-				int32_t zParam = 0;
-				gb.TryGetIValue('Z', zParam, seen);
+				uint16_t axisControls = 0;
+				for (size_t axis = 0; axis < numTotalAxes; axis++)
+				{
+					if (gb.Seen(axisLetters[axis]) && gb.GetIValue() > 0)
+					{
+						axisControls |= (1 << axis);
+					}
+				}
 
 				const MessageType mt = GetMessageBoxDevice(gb);						// get the display device
 
@@ -1748,7 +1754,7 @@ bool GCodes::HandleMcode(GCodeBuffer& gb, StringRef& reply)
 					gb.MachineState().waitingForAcknowledgement = true;				// flag that we are waiting for acknowledgement
 				}
 
-				platform.SendAlert(mt, messageBuffer, titleBuffer, (int)sParam, tParam, zParam == 1);
+				platform.SendAlert(mt, messageBuffer, titleBuffer, (int)sParam, tParam, axisControls);
 			}
 		}
 		break;

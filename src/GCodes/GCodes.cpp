@@ -2388,7 +2388,7 @@ void GCodes::DoManualProbe(GCodeBuffer& gb)
 		gb.MachineState().fileState.Close();							// stop reading from file
 		gb.MachineState().waitingForAcknowledgement = true;				// flag that we are waiting for acknowledgement
 		const MessageType mt = GetMessageBoxDevice(gb);
-		platform.SendAlert(mt, "Adjust height until the nozzle just touches the bed, then press OK", "Manual bed probing", 2, 0.0, true);
+		platform.SendAlert(mt, "Adjust height until the nozzle just touches the bed, then press OK", "Manual bed probing", 2, 0.0, (1 << Z_AXIS));
 	}
 }
 

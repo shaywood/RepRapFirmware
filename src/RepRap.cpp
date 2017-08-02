@@ -650,8 +650,8 @@ OutputBuffer *RepRap::GetStatusResponse(uint8_t type, ResponseSource source)
 				response->EncodeString(boxMessage, ARRAY_SIZE(boxMessage), false);
 				response->cat(",\"title\":");
 				response->EncodeString(boxTitle, ARRAY_SIZE(boxTitle), false);
-				response->catf(",\"mode\":%d,\"timeout\":%.1f,\"showZ\":%d}",
-						boxMode, timeLeft, boxZControls ? 1 : 0);
+				response->catf(",\"mode\":%d,\"timeout\":%.1f,\"controls\":%u}",
+						boxMode, timeLeft, boxControls);
 			}
 			response->cat("}");
 		}
@@ -1389,7 +1389,7 @@ OutputBuffer *RepRap::GetLegacyStatusResponse(uint8_t type, int seq)
 	if (displayMessageBox)
 	{
 		response->catf(",\"msgBox.mode\":%d,\"msgBox.timeout\":%.1f,\"msgBox.showZ\":%d",
-				boxMode, timeLeft, boxZControls ? 1 : 0);
+				boxMode, timeLeft, (boxControls == 2) ? 1 : 0);
 		response->cat(",\"msgBox.msg\":");
 		response->EncodeString(boxMessage, ARRAY_SIZE(boxMessage), false);
 		response->cat(",\"msgBox.title\":");
@@ -1623,14 +1623,14 @@ void RepRap::SetMessage(const char *msg)
 }
 
 // Display a message box on the web interface
-void RepRap::SetAlert(const char *msg, const char *title, int mode, float timeout, bool showZControls)
+void RepRap::SetAlert(const char *msg, const char *title, int mode, float timeout, uint16_t controls)
 {
 	SafeStrncpy(boxMessage, msg, ARRAY_SIZE(boxMessage));
 	SafeStrncpy(boxTitle, title, ARRAY_SIZE(boxTitle));
 	boxMode = mode;
 	boxTimer = (timeout <= 0.0) ? 0 : millis();
 	boxTimeout = round(max<float>(timeout, 0.0) * 1000.0);
-	boxZControls = showZControls;
+	boxControls = controls;
 	displayMessageBox = true;
 }
 

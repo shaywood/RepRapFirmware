@@ -47,6 +47,7 @@ Licence: GPL
 #include "Storage/FileData.h"
 #include "Storage/MassStorage.h"	// must be after Pins.h because it needs NumSdCards defined
 #include "MessageType.h"
+#include "ZProbeProgrammer.h"
 
 #if defined(DUET_NG)
 # include "DueXn.h"
@@ -79,10 +80,10 @@ const int INKJET_DELAY_MICROSECONDS = 800;				// How long to wait before the nex
 
 #endif
 
-const float MAX_FEEDRATES[DRIVES] = DRIVES_(100.0, 100.0, 3.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0);						// mm/sec
-const float ACCELERATIONS[DRIVES] = DRIVES_(500.0, 500.0, 20.0, 250.0, 250.0, 250.0, 250.0, 250.0, 250.0, 250.0);				// mm/sec^2
-const float DRIVE_STEPS_PER_UNIT[DRIVES] = DRIVES_(87.4890, 87.4890, 4000.0, 420.0, 420.0, 420.0, 420.0, 420.0, 420.0, 420.0);	// steps/mm
-const float INSTANT_DVS[DRIVES] = DRIVES_(15.0, 15.0, 0.2, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0);									// mm/sec
+const float MAX_FEEDRATES[DRIVES] = DRIVES_(100.0, 100.0, 3.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0);							// mm/sec
+const float ACCELERATIONS[DRIVES] = DRIVES_(500.0, 500.0, 20.0, 250.0, 250.0, 250.0, 250.0, 250.0, 250.0, 250.0, 250.0, 250.0);					// mm/sec^2
+const float DRIVE_STEPS_PER_UNIT[DRIVES] = DRIVES_(87.4890, 87.4890, 4000.0, 420.0, 420.0, 420.0, 420.0, 420.0, 420.0, 420.0, 420.0, 420.0);	// steps/mm
+const float INSTANT_DVS[DRIVES] = DRIVES_(15.0, 15.0, 0.2, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0);										// mm/sec
 
 // AXES
 
@@ -329,11 +330,13 @@ public:
 
 	// Timing
   
-	float Time();									// Returns elapsed seconds since some arbitrary time
-	static uint32_t GetInterruptClocks();			// Get the interrupt clock count
-	static bool ScheduleInterrupt(uint32_t tim);	// Schedule an interrupt at the specified clock count, or return true if it has passed already
-	static void DisableStepInterrupt();				// Make sure we get no step interrupts
-	void Tick();
+	float Time();											// Returns elapsed seconds since some arbitrary time - DEPRECATED
+	static uint32_t GetInterruptClocks();					// Get the interrupt clock count
+	static bool ScheduleStepInterrupt(uint32_t tim);		// Schedule an interrupt at the specified clock count, or return true if it has passed already
+	static void DisableStepInterrupt();						// Make sure we get no step interrupts
+	static bool ScheduleSoftTimerInterrupt(uint32_t tim);	// Schedule an interrupt at the specified clock count, or return true if it has passed already
+	static void DisableSoftTimerInterrupt();				// Make sure we get no software timer interrupts
+	void Tick();											// Process a systick interrupt
 
 	// Real-time clock
 
@@ -390,7 +393,7 @@ public:
 	void MessageF(const MessageType type, const char *fmt, ...);
 	void MessageF(const MessageType type, const char *fmt, va_list vargs);
 	bool FlushMessages();							// Flush messages to USB and aux, returning true if there is more to send
-	void SendAlert(MessageType mt, const char *message, const char *title, int sParam, float tParam, uint16_t controls);
+	void SendAlert(MessageType mt, const char *message, const char *title, int sParam, float tParam, bool zParam);
 
 	// Movement
 
@@ -483,9 +486,11 @@ public:
 	const ZProbeParameters& GetZProbeParameters(int32_t probeType) const;
 	const ZProbeParameters& GetCurrentZProbeParameters() const { return GetZProbeParameters(zProbeType); }
 	void SetZProbeParameters(int32_t probeType, const struct ZProbeParameters& params);
-	bool MustHomeXYBeforeZ() const;
+	bool HomingZWithProbe() const;
 	bool WriteZProbeParameters(FileStore *f) const;
 	void SetProbing(bool isProbing);
+	bool ProgramZProbe(GCodeBuffer& gb, StringRef& reply);
+	void SetZProbeModState(bool b) const;
 
 	// Ancilliary PWM
 
@@ -569,6 +574,11 @@ public:
 
 	// User I/O and servo support
 	bool GetFirmwarePin(int logicalPin, PinAccess access, Pin& firmwarePin, bool& invert);
+
+	// Filament sensor support
+	FilamentSensor *GetFilamentSensor(int extruder) const;
+	bool SetFilamentSensorType(int extruder, int newSensorType);
+	Pin GetEndstopPin(int endstop) const;			// Get the firmware pin number for an endstop
 
 //-------------------------------------------------------------------------------------------------------
   
@@ -679,6 +689,7 @@ private:
 	float driveStepsPerUnit[DRIVES];
 	float instantDvs[DRIVES];
 	float pressureAdvance[MaxExtruders];
+	FilamentSensor *filamentSensors[MaxExtruders];
 	float motorCurrents[DRIVES];					// the normal motor current for each stepper driver
 	float motorCurrentFraction[DRIVES];				// the percentages of normal motor current that each driver is set to
 	AxisDriversConfig axisDrivers[MaxAxes];			// the driver numbers assigned to each axis
@@ -708,8 +719,11 @@ private:
 
 	Pin zProbePin;
 	Pin zProbeModulationPin;
+	ZProbeProgrammer zProbeProg;
 	volatile ZProbeAveragingFilter zProbeOnFilter;					// Z probe readings we took with the IR turned on
 	volatile ZProbeAveragingFilter zProbeOffFilter;					// Z probe readings we took with the IR turned off
+
+	// Thermistors
 	volatile ThermistorAveragingFilter thermistorFilters[Heaters];	// bed and extruder thermistor readings
 #ifndef __RADDS__
 	volatile ThermistorAveragingFilter cpuTemperatureFilter;		// MCU temperature readings
@@ -836,7 +850,8 @@ private:
 
 	enum class AutoSaveState : uint8_t
 	{
-		normal = 0,
+		starting = 0,
+		normal,
 		autoPaused,
 		autoShutdown
 	};
@@ -854,9 +869,9 @@ private:
 /*static*/ inline void Platform::SetPinMode(Pin pin, PinMode mode)
 {
 #ifdef DUET_NG
-	if (pin >= ExpansionStart)
+	if (pin >= DueXnExpansionStart)
 	{
-		DuetExpansion::SetPinMode(pin - ExpansionStart, mode);
+		DuetExpansion::SetPinMode(pin, mode);
 	}
 	else
 	{
@@ -870,9 +885,9 @@ private:
 /*static*/ inline bool Platform::ReadPin(Pin pin)
 {
 #ifdef DUET_NG
-	if (pin >= ExpansionStart)
+	if (pin >= DueXnExpansionStart)
 	{
-		return DuetExpansion::DigitalRead(pin - ExpansionStart);
+		return DuetExpansion::DigitalRead(pin);
 	}
 	else
 	{
@@ -886,9 +901,9 @@ private:
 /*static*/ inline void Platform::WriteDigital(Pin pin, bool high)
 {
 #ifdef DUET_NG
-	if (pin >= ExpansionStart)
+	if (pin >= DueXnExpansionStart)
 	{
-		DuetExpansion::DigitalWrite(pin - ExpansionStart, high);
+		DuetExpansion::DigitalWrite(pin, high);
 	}
 	else
 	{
@@ -902,9 +917,9 @@ private:
 /*static*/ inline void Platform::WriteAnalog(Pin pin, float pwm, uint16_t freq)
 {
 #ifdef DUET_NG
-	if (pin >= ExpansionStart)
+	if (pin >= DueXnExpansionStart)
 	{
-		DuetExpansion::AnalogOut(pin - ExpansionStart, pwm);
+		DuetExpansion::AnalogOut(pin, pwm);
 	}
 	else
 	{

@@ -22,7 +22,7 @@ INCLUDES += -I"$(DUET_LIBRARY_PATH)/Flash" -I"$(DUET_LIBRARY_PATH)/RTCDue" -I"$(
 INCLUDES += -I"$(PWD)" -I"$(PWD)/Duet" -I"$(PWD)/Duet/EMAC" -I"$(PWD)/Duet/Lwip" -I"$(PWD)/Duet/Lwip/lwip/src/include"
 
 # Get source files
-VPATH := $(PWD) $(PWD)/Duet $(PWD)/GCodes $(PWD)/Heating $(PWD)/Heating/Sensors $(PWD)/Movement $(PWD)/Movement/BedProbing $(PWD)/Movement/Kinematics $(PWD)/Storage $(PWD)/Tools
+VPATH := $(PWD) $(PWD)/Duet $(PWD)/FilamentSensors $(PWD)/GCodes $(PWD)/Heating $(PWD)/Heating/Sensors $(PWD)/Movement $(PWD)/Movement/BedProbing $(PWD)/Movement/Kinematics $(PWD)/Storage $(PWD)/Tools
 VPATH += $(PWD)/Duet/EMAC $(PWD)/Duet/Lwip/contrib/apps/netbios $(PWD)/Duet/Lwip/contrib/apps/mdns $(PWD)/Duet/Lwip/lwip/src/api $(PWD)/Duet/Lwip/lwip/src/core $(PWD)/Duet/Lwip/lwip/src/core/ipv4 $(PWD)/Duet/Lwip/lwip/src/core/snmp $(PWD)/Duet/Lwip/lwip/src/netif $(PWD)/Duet/Lwip/lwip/src/netif/ppp $(PWD)/Duet/MCP4461
 VPATH += $(PWD)/Libraries/Fatfs $(PWD)/Libraries/General $(PWD)/Libraries/Math $(PWD)/Libraries/TemperatureSensor $(PWD)/Libraries/sha1
 

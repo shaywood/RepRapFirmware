@@ -28,16 +28,16 @@ Licence: GPL
 
 #include "RepRapFirmware.h"
 
-const size_t ToolNameLength = 32;					// maximum allowed length for tool names
-const uint32_t DefaultXAxisMapping = 1u << X_AXIS;	// by default, X is mapped to X
-const uint32_t DefaultYAxisMapping = 1u << Y_AXIS;	// by default, Y is mapped to Y
+const size_t ToolNameLength = 32;						// maximum allowed length for tool names
+const AxesBitmap DefaultXAxisMapping = 1u << X_AXIS;	// by default, X is mapped to X
+const AxesBitmap DefaultYAxisMapping = 1u << Y_AXIS;	// by default, Y is mapped to Y
 
 class Filament;
 class Tool
 {
 public:
 
-	static Tool *Create(int toolNumber, const char *name, long d[], size_t dCount, long h[], size_t hCount, AxesBitmap xMap, AxesBitmap yMap, FansBitmap fanMap);
+	static Tool *Create(int toolNumber, const char *name, long d[], size_t dCount, long h[], size_t hCount, AxesBitmap xMap, AxesBitmap yMap, FansBitmap fanMap, StringRef& reply);
 	static void Delete(Tool *t);
 
 	const float *GetOffset() const;
@@ -53,8 +53,6 @@ public:
 	void GetVariables(float* standby, float* active) const;
 	void DefineMix(const float m[]);
 	const float* GetMix() const;
-	void SetMixing(bool b);
-	bool GetMixing() const;
 	float MaxFeedrate() const;
 	float InstantDv() const;
 	void Print(StringRef& reply);
@@ -67,8 +65,6 @@ public:
 #ifdef DUET_NG
 	bool WriteSettings(FileStore *f) const;			// write the tool's settings to file
 #endif
-
-	float virtualExtruderPosition;
 
 	friend class RepRap;
 
@@ -110,7 +106,6 @@ private:
 	};
 	ToolState state;
 
-	bool mixing;
 	bool heaterFault;
 	volatile bool displayColdExtrudeWarning;
 };
@@ -143,16 +138,6 @@ inline int Tool::Number() const
 inline const float* Tool::GetMix() const
 {
 	return mix;
-}
-
-inline void Tool::SetMixing(bool b)
-{
-	mixing = b;
-}
-
-inline bool Tool::GetMixing() const
-{
-	return mixing;
 }
 
 inline size_t Tool::DriveCount() const

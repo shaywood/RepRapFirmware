@@ -18,6 +18,7 @@
 #include "PrintMonitor.h"
 #include "RepRap.h"
 #include "Tools/Tool.h"
+#include "FilamentSensors/FilamentSensor.h"
 
 #if SUPPORT_IOBITS
 # include "PortControl.h"
@@ -508,7 +509,14 @@ bool GCodes::HandleMcode(GCodeBuffer& gb, StringRef& reply)
 		}
 		else
 		{
-			fileToPrint.Seek(fileOffsetToPrint);
+			if (fileOffsetToPrint != 0)
+			{
+				// We executed M23 to set the file offset, which normally means that we are executing resurrect.g.
+				// We need to copy the absolute/relative and volumetric extrusion flags over
+				fileGCode->OriginalMachineState().drivesRelative = gb.MachineState().drivesRelative;
+				fileGCode->OriginalMachineState().volumetricExtrusion = gb.MachineState().volumetricExtrusion;
+				fileToPrint.Seek(fileOffsetToPrint);
+			}
 			fileGCode->OriginalMachineState().fileState.MoveFrom(fileToPrint);
 			fileInput->Reset();
 			reprap.GetPrintMonitor().StartedPrint();
@@ -516,13 +524,20 @@ bool GCodes::HandleMcode(GCodeBuffer& gb, StringRef& reply)
 		break;
 
 	case 226: // Gcode Initiated Pause
-		if (&gb == fileGCode)			// ignore M226 if it did't come from within a file being printed
+		if (&gb == fileGCode)						// ignore M226 if it did't come from within a file being printed
 		{
-			if (!LockMovement(gb))					// lock movement before calling DoPause
+			if (gb.IsDoingFileMacro())
 			{
-				return false;
+				pausePending = true;
 			}
-			DoPause(gb, false);
+			else
+			{
+				if (!LockMovement(gb))					// lock movement before calling DoPause
+				{
+					return false;
+				}
+				DoPause(gb, false);
+			}
 		}
 		break;
 
@@ -536,6 +551,10 @@ bool GCodes::HandleMcode(GCodeBuffer& gb, StringRef& reply)
 		{
 			reply.copy("Cannot pause print, because no file is being printed!");
 			error = true;
+		}
+		else if (fileGCode->IsDoingFileMacro())
+		{
+			pausePending = true;
 		}
 		else
 		{
@@ -574,7 +593,7 @@ bool GCodes::HandleMcode(GCodeBuffer& gb, StringRef& reply)
 			const char* str = gb.GetUnprecedentedString();
 			if (str != nullptr)
 			{
-				bool ok = OpenFileToWrite(gb, platform.GetGCodeDir(), str);
+				bool ok = OpenFileToWrite(gb, platform.GetGCodeDir(), str, 0, false, 0);
 				if (ok)
 				{
 					reply.printf("Writing to file: %s", str);
@@ -739,25 +758,11 @@ bool GCodes::HandleMcode(GCodeBuffer& gb, StringRef& reply)
 		break;
 
 	case 82:	// Use absolute extruder positioning
-		if (gb.MachineState().drivesRelative)		// don't reset the absolute extruder position if it was already absolute
-		{
-			for (size_t extruder = 0; extruder < MaxExtruders; extruder++)
-			{
-				lastRawExtruderPosition[extruder] = 0.0;
-			}
-			gb.MachineState().drivesRelative = false;
-		}
+		gb.MachineState().drivesRelative = false;
 		break;
 
 	case 83:	// Use relative extruder positioning
-		if (!gb.MachineState().drivesRelative)	// don't reset the absolute extruder position if it was already relative
-		{
-			for (size_t extruder = 0; extruder < MaxExtruders; extruder++)
-			{
-				lastRawExtruderPosition[extruder] = 0.0;
-			}
-			gb.MachineState().drivesRelative = true;
-		}
+		gb.MachineState().drivesRelative = true;
 		break;
 
 		// For case 84, see case 18
@@ -1016,10 +1021,15 @@ bool GCodes::HandleMcode(GCodeBuffer& gb, StringRef& reply)
 		{
 			reply.printf("FIRMWARE_NAME: %s FIRMWARE_VERSION: %s ELECTRONICS: %s", FIRMWARE_NAME, VERSION, platform.GetElectronicsString());
 #ifdef DUET_NG
-			const char* expansionName = DuetExpansion::GetExpansionBoardName();
+			const char* const expansionName = DuetExpansion::GetExpansionBoardName();
 			if (expansionName != nullptr)
 			{
 				reply.catf(" + %s", expansionName);
+			}
+			const char* const additionalExpansionName = DuetExpansion::GetAdditionalExpansionBoardName();
+			if (additionalExpansionName != nullptr)
+			{
+				reply.catf(" + %s", additionalExpansionName);
 			}
 #endif
 			reply.catf(" FIRMWARE_DATE: %s", DATE);
@@ -1343,7 +1353,7 @@ bool GCodes::HandleMcode(GCodeBuffer& gb, StringRef& reply)
 		}
 		break;
 
-	case 200: // Set filament diameter for volumetric extrusion
+	case 200: // Set filament diameter for volumetric extrusion and enable/disable volumetric extrusion
 		if (gb.Seen('D'))
 		{
 			float diameters[MaxExtruders];
@@ -1354,10 +1364,15 @@ bool GCodes::HandleMcode(GCodeBuffer& gb, StringRef& reply)
 				const float d = diameters[i];
 				volumetricExtrusionFactors[i] = (d <= 0.0) ? 1.0 : 4.0/(fsquare(d) * PI);
 			}
+			gb.MachineState().volumetricExtrusion = (diameters[0] > 0.0);
+		}
+		else if (!gb.MachineState().volumetricExtrusion)
+		{
+			reply.copy("Volumetric extrusion is disabled for this input source");
 		}
 		else
 		{
-			reply.copy("Filament diameters for volumentric extrusion:");
+			reply.copy("Filament diameters for volumetric extrusion:");
 			for (size_t i = 0; i < numExtruders; ++i)
 			{
 				const float vef = volumetricExtrusionFactors[i];
@@ -1736,12 +1751,12 @@ bool GCodes::HandleMcode(GCodeBuffer& gb, StringRef& reply)
 					tParam = 0.0;
 				}
 
-				uint16_t axisControls = 0;
+				AxesBitmap axisControls = 0;
 				for (size_t axis = 0; axis < numTotalAxes; axis++)
 				{
 					if (gb.Seen(axisLetters[axis]) && gb.GetIValue() > 0)
 					{
-						axisControls |= (1 << axis);
+						SetBit(axisControls, axis);
 					}
 				}
 
@@ -2378,37 +2393,31 @@ bool GCodes::HandleMcode(GCodeBuffer& gb, StringRef& reply)
 		}
 		break;
 
-	case 559: // Upload config.g or another gcode file to put in the sys directory
+	case 559:
+	case 560: // Binary writing
+	{
+		const char* folder = platform.GetSysDir();
+		const char* defaultFile = platform.GetConfigFile();
+		if (code == 560)
 		{
-			const char* str = (gb.Seen('P') ? gb.GetString() : platform.GetConfigFile());
-			const bool ok = OpenFileToWrite(gb, platform.GetSysDir(), str);
-			if (ok)
-			{
-				reply.printf("Writing to file: %s", str);
-			}
-			else
-			{
-				reply.printf("Can't open file %s for writing.", str);
-				error = true;
-			}
+			folder = platform.GetWebDir();
+			defaultFile = INDEX_PAGE_FILE;
 		}
-		break;
-
-	case 560: // Upload reprap.htm or another web interface file
+		const char* filename = (gb.Seen('P') ? gb.GetString() : defaultFile);
+		const FilePosition size = (gb.Seen('S') ? (FilePosition)gb.GetIValue() : 0);
+		const uint32_t crc32 = (gb.Seen('C') ? gb.GetUIValue() : 0);
+		const bool ok = OpenFileToWrite(gb, folder, filename, size, true, crc32);
+		if (ok)
 		{
-			const char* str = (gb.Seen('P') ? gb.GetString() : INDEX_PAGE_FILE);
-			const bool ok = OpenFileToWrite(gb, platform.GetWebDir(), str);
-			if (ok)
-			{
-				reply.printf("Writing to file: %s", str);
-			}
-			else
-			{
-				reply.printf("Can't open file %s for writing.", str);
-				error = true;
-			}
+			reply.printf("Writing to file: %s", filename);
 		}
-		break;
+		else
+		{
+			reply.printf("Can't open file %s for writing.", filename);
+			error = true;
+		}
+	}
+	break;
 
 	case 561: // Set identity transform (also clears bed probe grid)
 		reprap.GetMove().SetIdentityTransform();
@@ -2489,7 +2498,7 @@ bool GCodes::HandleMcode(GCodeBuffer& gb, StringRef& reply)
 	case 567: // Set/report tool mix ratios
 		if (gb.Seen('P'))
 		{
-			int8_t tNumber = gb.GetIValue();
+			const int8_t tNumber = gb.GetIValue();
 			Tool* const tool = reprap.GetTool(tNumber);
 			if (tool != nullptr)
 			{
@@ -2522,21 +2531,7 @@ bool GCodes::HandleMcode(GCodeBuffer& gb, StringRef& reply)
 		break;
 
 	case 568: // Turn on/off automatic tool mixing
-		if (gb.Seen('P'))
-		{
-			Tool* const tool = reprap.GetTool(gb.GetIValue());
-			if (tool != nullptr)
-			{
-				if (gb.Seen('S'))
-				{
-					tool->SetMixing(gb.GetIValue() != 0);
-				}
-				else
-				{
-					reply.printf("Tool %d mixing is %s", tool->Number(), (tool->GetMixing()) ? "enabled" : "disabled");
-				}
-			}
-		}
+		reply.copy("The M568 command is no longer needed");
 		break;
 
 	case 569: // Set/report axis direction
@@ -3012,6 +3007,7 @@ bool GCodes::HandleMcode(GCodeBuffer& gb, StringRef& reply)
 						while (numTotalAxes <= drive)
 						{
 							moveBuffer.coords[numTotalAxes] = 0.0;		// user has defined a new axis, so set its position
+							currentUserPosition[numTotalAxes] = 0.0;	// set its requested user position too in case it is visible
 							++numTotalAxes;
 						}
 						numVisibleAxes = numTotalAxes;					// assume all axes are visible unless there is a P parameter
@@ -3316,6 +3312,38 @@ bool GCodes::HandleMcode(GCodeBuffer& gb, StringRef& reply)
 		break;
 #endif
 
+	case 591: // Configure filament sensor
+		if (gb.Seen('D'))
+		{
+			int extruder = gb.GetIValue();
+			if (extruder >= 0 && extruder < (int)numExtruders)
+			{
+				bool seen = false;
+				long sensorType;
+				gb.TryGetIValue('P', sensorType, seen);
+				if (seen)
+				{
+					platform.SetFilamentSensorType(extruder, sensorType);
+				}
+
+				FilamentSensor *sensor = platform.GetFilamentSensor(extruder);
+				if (sensor != nullptr)
+				{
+					// Configure the sensor
+					error = sensor->Configure(gb, reply, seen);
+					if (error)
+					{
+						platform.SetFilamentSensorType(extruder, 0);		// delete the sensor
+					}
+				}
+				else if (!seen)
+				{
+					reply.printf("Extruder drive %d has no filament sensor", extruder);
+				}
+			}
+		}
+		break;
+
 	case 593: // Configure filament properties
 		// TODO: We may need this code later to restrict specific filaments to certain tools or to reset filament counters.
 		break;
@@ -3487,6 +3515,10 @@ bool GCodes::HandleMcode(GCodeBuffer& gb, StringRef& reply)
 			return false;
 		}
 		(void)reprap.GetMove().GetKinematics().Configure(code, gb, reply, error);
+		break;
+
+	case 672: // Program Z probe
+		error = platform.ProgramZProbe(gb, reply);
 		break;
 
 	case 701: // Load filament
@@ -3951,9 +3983,6 @@ bool GCodes::HandleTcode(GCodeBuffer& gb, StringRef& reply)
 		// See if the tool can be changed
 		newToolNumber = gb.GetIValue();
 		newToolNumber += gb.GetToolNumberAdjust();
-
-		reprap.GetMove().GetCurrentUserPosition(toolChangeRestorePoint.moveCoords, 0, reprap.GetCurrentXAxes(), reprap.GetCurrentYAxes());
-		toolChangeRestorePoint.feedRate = gb.MachineState().feedrate;
 
 		if (simulationMode == 0)						// we don't yet simulate any T codes
 		{

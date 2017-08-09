@@ -20,8 +20,6 @@ Licence: GPL
 #ifndef ROLAND_H
 #define ROLAND_H
 
-#include "RepRapFirmware.h"
-
 #if SUPPORT_ROLAND
 
 // This class allows the RepRap firmware to transmit commands to a Roland mill
@@ -29,7 +27,7 @@ Licence: GPL
 //      http://altlab.org/d/content/m/pangelo/ideas/rml_command_guide_en_v100.pdf
 
 #include "RepRapFirmware.h"
-#include "Arduino.h"
+#include "Core.h"
 #include "Platform.h"
 
 const float ROLAND_FACTOR = (1.016088061*100.0/2.54);	// Roland units are 0.001"

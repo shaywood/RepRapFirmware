@@ -14,7 +14,7 @@
 // Create a default GCodeBuffer
 GCodeBuffer::GCodeBuffer(const char* id, MessageType mt, bool usesCodeQueue)
 	: machineState(new GCodeMachineState()), identity(id), checksumRequired(false), writingFileDirectory(nullptr),
-	  toolNumberAdjust(0), responseMessageType(mt), queueCodes(usesCodeQueue)
+	  toolNumberAdjust(0), responseMessageType(mt), queueCodes(usesCodeQueue), binaryWriting(false)
 {
 	Init();
 }
@@ -469,6 +469,20 @@ int32_t GCodeBuffer::GetIValue()
 	return result;
 }
 
+// Get an uint32 after a G Code letter
+uint32_t GCodeBuffer::GetUIValue()
+{
+	if (readPointer < 0)
+	{
+		reprap.GetPlatform().Message(GENERIC_MESSAGE, "Error: GCodes: Attempt to read a GCode int before a search.\n");
+		readPointer = -1;
+		return 0;
+	}
+	const uint32_t result = strtoul(&gcodeBuffer[readPointer + 1], 0, 0);
+	readPointer = -1;
+	return result;
+}
+
 // If the specified parameter character is found, fetch 'value' and set 'seen'. Otherwise leave val and seen alone.
 void GCodeBuffer::TryGetFValue(char c, float& val, bool& seen)
 {
@@ -607,6 +621,7 @@ bool GCodeBuffer::PushState()
 	ms->doingFileMacro = machineState->doingFileMacro;
 	ms->waitWhileCooling = machineState->waitWhileCooling;
 	ms->runningM502 = machineState->runningM502;
+	ms->volumetricExtrusion = false;
 	ms->messageAcknowledged = false;
 	ms->waitingForAcknowledgement = false;
 	machineState = ms;

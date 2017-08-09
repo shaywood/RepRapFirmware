@@ -6,6 +6,10 @@
  */
 
 #include "ScaraKinematics.h"
+#include "RepRap.h"
+#include "Platform.h"
+#include "GCodes/GCodeBuffer.h"
+#include "Movement/DDA.h"
 
 ScaraKinematics::ScaraKinematics()
 	: Kinematics(KinematicsType::scara, DefaultSegmentsPerSecond, DefaultMinSegmentSize, true),
@@ -219,22 +223,6 @@ void ScaraKinematics::GetAssumedInitialPosition(size_t numAxes, float positions[
 	}
 }
 
-// Return true if the specified endstop axis uses shared motors.
-// Used to determine whether to abort the whole move or just one motor when an endstop switch is triggered.
-bool ScaraKinematics::DriveIsShared(size_t drive) const
-{
-	switch (drive)
-	{
-	case X_AXIS:
-		return crosstalk[0] != 0.0 || crosstalk[1] != 0.0;
-	case Y_AXIS:
-		return crosstalk[2] != 0.0;
-	case Z_AXIS:
-	default:
-		return false;
-	}
-}
-
 // Return the axes that we can assume are homed after executing a G92 command to set the specified axis coordinates
 AxesBitmap ScaraKinematics::AxesAssumedHomed(AxesBitmap g92Axes) const
 {
@@ -245,6 +233,38 @@ AxesBitmap ScaraKinematics::AxesAssumedHomed(AxesBitmap g92Axes) const
 		g92Axes &= ~xyAxes;
 	}
 	return g92Axes;
+}
+
+// This function is called when a request is made to home the axes in 'toBeHomed' and the axes in 'alreadyHomed' have already been homed.
+// If we can proceed with homing some axes, return the name of the homing file to be called.
+// If we can't proceed because other axes need to be homed first, return nullptr and pass those axes back in 'mustBeHomedFirst'.
+const char* ScaraKinematics::GetHomingFileName(AxesBitmap toBeHomed, AxesBitmap& alreadyHomed, size_t numVisibleAxes, AxesBitmap& mustHomeFirst) const
+{
+	const char* ret = Kinematics::GetHomingFileName(toBeHomed, alreadyHomed, numVisibleAxes, mustHomeFirst);
+	return (ret == StandardHomingFileNames[X_AXIS]) ? HomeProximalFileName
+			: (ret == StandardHomingFileNames[Y_AXIS]) ? HomeDistalFileName
+				: ret;
+}
+
+// This function is called from the step ISR when an endstop switch is triggered during homing.
+// Return true if the entire homing move should be terminated, false if only the motor associated with the endstop switch should be stopped.
+bool ScaraKinematics::QueryTerminateHomingMove(size_t axis) const
+{
+	return false;
+}
+
+// This function is called from the step ISR when an endstop switch is triggered during homing after stopping just one motor or all motors.
+// Take the action needed to define the current position, normally by calling dda.SetDriveCoordinate() and return false.
+void ScaraKinematics::OnHomingSwitchTriggered(size_t axis, bool highEnd, const float stepsPerMm[], DDA& dda) const
+{
+	const float hitPoint = (axis == 0)
+							? ((highEnd) ? thetaLimits[1] : thetaLimits[0])						// proximal joint homing switch
+							  : (axis == 1)
+								? ((highEnd) ? phiMinusThetaLimits[1] : phiMinusThetaLimits[0])	// distal joint homing switch
+								  : (highEnd)
+									? reprap.GetPlatform().AxisMaximum(axis)					// other axis (e.g. Z) high end homing switch
+									  : reprap.GetPlatform().AxisMinimum(axis);					// other axis (e.g. Z) low end homing switch
+	dda.SetDriveCoordinate(hitPoint * stepsPerMm[axis], axis);
 }
 
 // Recalculate the derived parameters

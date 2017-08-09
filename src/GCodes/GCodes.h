@@ -30,9 +30,6 @@ Licence: GPL
 #include "Tools/Filament.h"
 #include "RestorePoint.h"
 
-class GCodeBuffer;
-class GCodeQueue;
-
 const char feedrateLetter = 'F';						// GCode feedrate
 const char extrudeLetter = 'E'; 						// GCode extrude
 
@@ -81,7 +78,7 @@ public:
 		float coords[DRIVES];											// new positions for the axes, amount of movement for the extruders
 		float initialCoords[MaxAxes];									// the initial positions of the axes
 		float feedRate;													// feed rate of this move
-		float virtualExtruderPosition;									// the virtual extruder position of the current tool at the start of this move
+		float virtualExtruderPosition;									// the virtual extruder position at the start of this move
 		FilePosition filePos;											// offset in the file being printed at the start of reading this move
 		AxesBitmap xAxes;												// axes that X is mapped to
 		AxesBitmap yAxes;												// axes that Y is mapped to
@@ -123,7 +120,6 @@ public:
 
 	float GetSpeedFactor() const { return speedFactor * MinutesToSeconds; }	// Return the current speed factor
 	float GetExtrusionFactor(size_t extruder) { return extrusionFactors[extruder]; } // Return the current extrusion factors
-	float GetRawExtruderPosition(size_t drive) const;					// Get the actual extruder position, after adjusting the extrusion factor
 	float GetRawExtruderTotalByDrive(size_t extruder) const;			// Get the total extrusion since start of print, for one drive
 	float GetTotalRawExtrusion() const { return rawExtruderTotal; }		// Get the total extrusion since start of print, all drives
 	float GetBabyStepOffset() const { return currentBabyStepZOffset; }	// Get the current baby stepping Z offset
@@ -210,7 +206,6 @@ private:
 
 	bool SetPositions(GCodeBuffer& gb);									// Deal with a G92
 	bool LoadExtrusionAndFeedrateFromGCode(GCodeBuffer& gb, int moveType); // Set up the extrusion and feed rate of a move for the Move class
-	float GetVirtualExtruderPosition() const;							// Get the virtual extruder position of the current tool
 
 	bool Push(GCodeBuffer& gb);											// Push feedrate etc on the stack
 	void Pop(GCodeBuffer& gb);											// Pop feedrate etc
@@ -218,7 +213,9 @@ private:
 	void SetMACAddress(GCodeBuffer& gb);								// Deals with an M540
 	void HandleReply(GCodeBuffer& gb, bool error, const char *reply);	// Handle G-Code replies
 	void HandleReply(GCodeBuffer& gb, bool error, OutputBuffer *reply);
-	bool OpenFileToWrite(GCodeBuffer& gb, const char* directory, const char* fileName);	// Start saving GCodes in a file
+	bool OpenFileToWrite(GCodeBuffer& gb, const char* directory, const char* fileName, const FilePosition size, const bool binaryWrite, const uint32_t fileCRC32);
+																		// Start saving GCodes in a file
+	void FinishWrite(GCodeBuffer& gb);									// Finish writing to the file and respond
 	bool SendConfigToLine();											// Deal with M503
 	bool OffsetAxes(GCodeBuffer& gb);									// Set offsets - deprecated, use G10
 	void SetPidParameters(GCodeBuffer& gb, int heater, StringRef& reply); // Set the P/I/D parameters for a heater
@@ -266,6 +263,8 @@ private:
 	MessageType GetMessageBoxDevice(GCodeBuffer& gb) const;				// Decide which device to display a message box on
 	void DoManualProbe(GCodeBuffer& gb);								// Do a manual bed probe
 
+	void AppendAxes(StringRef& reply, AxesBitmap axes) const;			// Append a list of axes to a string
+
 #ifdef DUET_NG
 	void SaveResumeInfo();
 #endif
@@ -298,6 +297,7 @@ private:
 
 	bool active;								// Live and running?
 	bool isPaused;								// true if the print has been paused manually or automatically
+	bool pausePending;							// true if we have been asked to pause but we are running a macro
 #ifdef DUET_NG
 	bool isAutoPaused;							// true if the print was paused automatically
 	bool resumeInfoSaved;						// true if we have saved resume info at this pause point
@@ -325,16 +325,19 @@ private:
 	size_t numExtruders;						// How many extruders we have, or may have
 	float axisOffsets[MaxAxes];					// M206 axis offsets
 	float axisScaleFactors[MaxAxes];			// Scale XYZ coordinates by this factor (for Delta configurations)
-	float lastRawExtruderPosition[MaxExtruders]; // Extruder position of the last move fed into the Move class
-	float rawExtruderTotalByDrive[MaxExtruders]; // Total extrusion amount fed to Move class since starting print, before applying extrusion factor, per drive
+	float virtualExtruderPosition;				// Virtual extruder position of the last move fed into the Move class
+	float rawExtruderTotalByDrive[MaxExtruders]; // Extrusion amount in the last G1 command with an E parameter when in absolute extrusion mode
 	float rawExtruderTotal;						// Total extrusion amount fed to Move class since starting print, before applying extrusion factor, summed over all drives
 	float record[DRIVES];						// Temporary store for move positions
 	float distanceScale;						// MM or inches
 	float arcSegmentLength;						// Length of segments that we split arc moves into
+
 	FileData fileToPrint;						// The next file to print
 	FilePosition fileOffsetToPrint;				// The offset to print from
+
 	FileStore* fileBeingWritten;				// A file to write G Codes (or sometimes HTML) to
-	AxesBitmap toBeHomed;						// Bitmap of axes still to be homed
+	FilePosition fileSize;						// Size of the file being written
+
 	int oldToolNumber, newToolNumber;			// Tools being changed
 	int toolChangeParam;						// Bitmap of all the macros to be run during a tool change
 
@@ -342,7 +345,10 @@ private:
 	uint8_t eofStringCounter;					// Check the...
 	uint8_t eofStringLength;					// ... EoF string as we read.
 	bool limitAxes;								// Don't think outside the box.
+
+	AxesBitmap toBeHomed;						// Bitmap of axes still to be homed
 	AxesBitmap axesHomed;						// Bitmap of which axes have been homed
+
 	float pausedFanSpeeds[NUM_FANS];			// Fan speeds when the print was paused or a tool change started
 	float lastDefaultFanSpeed;					// Last speed given in a M106 command with on fan number
 	float pausedDefaultFanSpeed;				// The speed of the default print cooling fan when the print was paused or a tool change started
@@ -401,8 +407,6 @@ private:
 	bool displayNoToolWarning;					// True if we need to display a 'no tool selected' warning
 	bool displayDeltaNotHomedWarning;			// True if we need to display a 'attempt to move before homing on a delta printer' message
 	char filamentToLoad[FilamentNameLength];	// Name of the filament being loaded
-
-	static const char* const HomingFileNames[MaxAxes];
 
 	static constexpr const char* BED_EQUATION_G = "bed.g";
 	static constexpr const char* RESUME_G = "resume.g";

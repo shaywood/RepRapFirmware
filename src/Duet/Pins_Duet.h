@@ -1,7 +1,7 @@
 #ifndef PINS_DUET_H__
 #define PINS_DUET_H__
 
-#define FIRMWARE_NAME "RepRapFirmware for Duet (ch fork)"
+#define FIRMWARE_NAME "RepRapFirmware for Duet"
 
 const size_t NumFirmwareUpdateModules = 1;
 #define IAP_UPDATE_FILE "iap.bin"
@@ -17,7 +17,7 @@ const size_t NumFirmwareUpdateModules = 1;
 // The physical capabilities of the machine
 
 const size_t DRIVES = 9;						// The number of drives in the machine, including X, Y, and Z plus extruder drives
-#define DRIVES_(a,b,c,d,e,f,g,h,i,j) { a,b,c,d,e,f,g,h,i }
+#define DRIVES_(a,b,c,d,e,f,g,h,i,j,k,l) { a,b,c,d,e,f,g,h,i }
 
 const size_t Heaters = 7;						// The number of heaters in the machine; 0 is the heated bed even if there isn't one
 #define HEATERS_(a,b,c,d,e,f,g,h) { a,b,c,d,e,f,g }
@@ -115,9 +115,9 @@ const Pin COOLING_FAN_PINS[NUM_FANS] = { X6, X17 };						// Pin D34 is PWM capab
 const Pin COOLING_FAN_RPM_PIN = 23;										// Pin PA15
 
 // SD cards
-const size_t NumSdCards = 1;
-const Pin SdCardDetectPins[NumSdCards] = {13};
-const Pin SdWriteProtectPins[NumSdCards] = {NoPin};
+const size_t NumSdCards = 2;
+const Pin SdCardDetectPins[NumSdCards] = {13, NoPin};
+const Pin SdWriteProtectPins[NumSdCards] = {NoPin, NoPin};
 const Pin SdSpiCSPins[1] = {67};										// Pin PB16 Note: this clashes with inkjet support
 
 #if SUPPORT_INKJET

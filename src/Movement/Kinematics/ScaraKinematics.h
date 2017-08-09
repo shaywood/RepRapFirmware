@@ -35,9 +35,11 @@ public:
 	bool LimitPosition(float position[], size_t numAxes, AxesBitmap axesHomed) const override;
 	void GetAssumedInitialPosition(size_t numAxes, float positions[]) const override;
 	const char* HomingButtonNames() const override { return "PDZUVW"; }
-	bool DriveIsShared(size_t drive) const override;
-	HomingMode GetHomingMode() const override { return homeSharedMotors; }
+	HomingMode GetHomingMode() const override { return homeIndividualMotors; }
 	AxesBitmap AxesAssumedHomed(AxesBitmap g92Axes) const override;
+	const char* GetHomingFileName(AxesBitmap toBeHomed, AxesBitmap& alreadyHomed, size_t numVisibleAxes, AxesBitmap& mustHomeFirst) const override;
+	bool QueryTerminateHomingMove(size_t axis) const override;
+	void OnHomingSwitchTriggered(size_t axis, bool highEnd, const float stepsPerMm[], DDA& dda) const override;
 
 private:
 	static constexpr float DefaultSegmentsPerSecond = 200.0;
@@ -48,6 +50,9 @@ private:
 	static constexpr float DefaultMaxTheta = 90.0;								// maximum proximal joint angle
 	static constexpr float DefaultMinPhiMinusTheta = -135.0;					// minimum distal joint angle
 	static constexpr float DefaultMaxPhiMinusTheta = 135.0;						// maximum distal joint angle
+
+	static constexpr const char *HomeProximalFileName = "homeproximal.g";
+	static constexpr const char *HomeDistalFileName = "homedistal.g";
 
 	void Recalc();
 

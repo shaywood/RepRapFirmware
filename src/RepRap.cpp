@@ -10,6 +10,10 @@
 #include "Tools/Tool.h"
 #include "Tools/Filament.h"
 
+#ifdef DUET_NG
+#include "DueXn.h"
+#endif
+
 #if SUPPORT_IOBITS
 # include "PortControl.h"
 #endif
@@ -32,6 +36,14 @@ extern "C" void hsmciIdle()
 		reprap.GetPortControl().Spin(false);
 	}
 #endif
+
+#ifdef DUET_NG
+	if (reprap.GetSpinningModule() != moduleDuetExpansion)
+	{
+		DuetExpansion::Spin(false);
+	}
+#endif
+
 }
 
 // RepRap member functions.
@@ -198,6 +210,12 @@ void RepRap::Spin()
 	ticksInSpinState = 0;
 	printMonitor->Spin();
 
+#ifdef DUET_NG
+	spinningModule = moduleDuetExpansion;
+	ticksInSpinState = 0;
+	DuetExpansion::Spin(true);
+#endif
+
 	spinningModule = noModule;
 	ticksInSpinState = 0;
 
@@ -272,7 +290,7 @@ void RepRap::EmergencyStop()
 	for(int i = 0; i < 2; i++)
 	{
 		move->Exit();
-		for(size_t drive = 0; drive < DRIVES; drive++)
+		for (size_t drive = 0; drive < DRIVES; drive++)
 		{
 			platform->SetMotorCurrent(drive, 0.0, false);
 			platform->DisableDrive(drive);
@@ -546,7 +564,7 @@ OutputBuffer *RepRap::GetStatusResponse(uint8_t type, ResponseSource source)
 	// Coordinates
 	const size_t numAxes = reprap.GetGCodes().GetVisibleAxes();
 	{
-		float liveCoordinates[DRIVES + 1];
+		float liveCoordinates[DRIVES];
 #if SUPPORT_ROLAND
 		if (roland->Active())
 		{
@@ -590,12 +608,14 @@ OutputBuffer *RepRap::GetStatusResponse(uint8_t type, ResponseSource source)
 		}
 
 		// XYZ positions
-		// TODO ideally we would report "unknown" or similar for axis positions that are not known because we haven't homed them, but that requires changes to DWC and PanelDue.
+		// TODO ideally we would report "unknown" or similar for axis positions that are not known because we haven't homed them, but that requires changes to both DWC and PanelDue.
 		response->cat("],\"xyz\":");
 		ch = '[';
 		for (size_t axis = 0; axis < numAxes; axis++)
 		{
-			response->catf("%c%.3f", ch, liveCoordinates[axis]);
+			// Coordinates may be NaNs, for example when delta or SCARA homing fails. Replace any NaNs by 999.9 to prevent JSON parsing errors.
+			const float coord = liveCoordinates[axis];
+			response->catf("%c%.3f", ch, (std::isnan(coord) || std::isinf(coord)) ? 999.9 : coord);
 			ch = ',';
 		}
 	}
@@ -1147,6 +1167,11 @@ OutputBuffer *RepRap::GetConfigResponse()
 	{
 		response->catf(" + %s", expansionName);
 	}
+	const char* additionalExpansionName = DuetExpansion::GetAdditionalExpansionBoardName();
+	if (additionalExpansionName != nullptr)
+	{
+		response->catf(" + %s", additionalExpansionName);
+	}
 #endif
 	response->catf("\",\"firmwareName\":\"%s\"", FIRMWARE_NAME);
 	response->catf(",\"firmwareVersion\":\"%s\"", VERSION);
@@ -1304,18 +1329,8 @@ OutputBuffer *RepRap::GetLegacyStatusResponse(uint8_t type, int seq)
 		ch = ',';
 	}
 
-	// Send extruder total extrusion since power up, last G92 or last M23
-	response->cat("],\"extr\":");		// announce the extruder positions
-	ch = '[';
-	for (size_t drive = 0; drive < reprap.GetExtrudersInUse(); drive++)		// loop through extruders
-	{
-		response->catf("%c%.1f", ch, gCodes->GetRawExtruderPosition(drive));
-		ch = ',';
-	}
-	response->cat((ch == '[') ? "[]" : "]");
-
 	// Send the speed and extruder override factors
-	response->catf(",\"sfactor\":%.2f,\"efactor\":", gCodes->GetSpeedFactor() * 100.0);
+	response->catf("],\"sfactor\":%.2f,\"efactor\":", gCodes->GetSpeedFactor() * 100.0);
 	ch = '[';
 	for (size_t i = 0; i < reprap.GetExtrudersInUse(); ++i)
 	{
@@ -1388,8 +1403,8 @@ OutputBuffer *RepRap::GetLegacyStatusResponse(uint8_t type, int seq)
 
 	if (displayMessageBox)
 	{
-		response->catf(",\"msgBox.mode\":%d,\"msgBox.timeout\":%.1f,\"msgBox.showZ\":%d",
-				boxMode, timeLeft, (boxControls == 2) ? 1 : 0);
+		response->catf(",\"msgBox.mode\":%d,\"msgBox.timeout\":%.1f,\"msgBox.axes\":%u",
+				boxMode, timeLeft, boxControls);
 		response->cat(",\"msgBox.msg\":");
 		response->EncodeString(boxMessage, ARRAY_SIZE(boxMessage), false);
 		response->cat(",\"msgBox.title\":");
@@ -1623,7 +1638,7 @@ void RepRap::SetMessage(const char *msg)
 }
 
 // Display a message box on the web interface
-void RepRap::SetAlert(const char *msg, const char *title, int mode, float timeout, uint16_t controls)
+void RepRap::SetAlert(const char *msg, const char *title, int mode, float timeout, AxesBitmap controls)
 {
 	SafeStrncpy(boxMessage, msg, ARRAY_SIZE(boxMessage));
 	SafeStrncpy(boxTitle, title, ARRAY_SIZE(boxTitle));
@@ -1744,13 +1759,13 @@ void RepRap::ClearTemperatureFault(int8_t wasDudHeater)
 }
 
 // Get the current axes used as X axes
-uint32_t RepRap::GetCurrentXAxes() const
+AxesBitmap RepRap::GetCurrentXAxes() const
 {
 	return (currentTool == nullptr) ? DefaultXAxisMapping : currentTool->GetXAxisMap();
 }
 
 // Get the current axes used as X axes
-uint32_t RepRap::GetCurrentYAxes() const
+AxesBitmap RepRap::GetCurrentYAxes() const
 {
 	return (currentTool == nullptr) ? DefaultYAxisMapping : currentTool->GetYAxisMap();
 }

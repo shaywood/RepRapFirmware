@@ -176,7 +176,6 @@ void NetworkResponder::SendData()
 void NetworkResponder::ConnectionLost()
 {
 	CancelUpload();
-
 	OutputBuffer::ReleaseAll(outBuf);
 	outBuf = nullptr;
 	outStack->ReleaseAll();

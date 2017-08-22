@@ -474,10 +474,7 @@ bool GCodes::HandleMcode(GCodeBuffer& gb, StringRef& reply)
 
 					if (code == 32)
 					{
-						fileToPrint.Seek(fileOffsetToPrint);
-						fileGCode->OriginalMachineState().fileState.MoveFrom(fileToPrint);
-						fileInput->Reset();
-						reprap.GetPrintMonitor().StartedPrint();
+						StartPrinting();
 					}
 				}
 				else
@@ -517,9 +514,7 @@ bool GCodes::HandleMcode(GCodeBuffer& gb, StringRef& reply)
 				fileGCode->OriginalMachineState().volumetricExtrusion = gb.MachineState().volumetricExtrusion;
 				fileToPrint.Seek(fileOffsetToPrint);
 			}
-			fileGCode->OriginalMachineState().fileState.MoveFrom(fileToPrint);
-			fileInput->Reset();
-			reprap.GetPrintMonitor().StartedPrint();
+			StartPrinting();
 		}
 		break;
 
@@ -1760,8 +1755,6 @@ bool GCodes::HandleMcode(GCodeBuffer& gb, StringRef& reply)
 					}
 				}
 
-				const MessageType mt = GetMessageBoxDevice(gb);						// get the display device
-
 				// If we need to wait for an acknowledgement, save the state and set waiting
 				if ((sParam == 2 || sParam == 3) && Push(gb))						// stack the machine state including the file position
 				{
@@ -1769,6 +1762,9 @@ bool GCodes::HandleMcode(GCodeBuffer& gb, StringRef& reply)
 					gb.MachineState().waitingForAcknowledgement = true;				// flag that we are waiting for acknowledgement
 				}
 
+				// TODO: consider displaying the message box on all relevant devices. Acknowledging any one of them needs to clear them all.
+				// Currently, if mt is http or aux or generic, we display the message box both in DWC and on PanelDue.
+				const MessageType mt = GetMessageBoxDevice(gb);						// get the display device
 				platform.SendAlert(mt, messageBuffer, titleBuffer, (int)sParam, tParam, axisControls);
 			}
 		}
@@ -3323,17 +3319,17 @@ bool GCodes::HandleMcode(GCodeBuffer& gb, StringRef& reply)
 				gb.TryGetIValue('P', sensorType, seen);
 				if (seen)
 				{
-					platform.SetFilamentSensorType(extruder, sensorType);
+					FilamentSensor::SetFilamentSensorType(extruder, sensorType);
 				}
 
-				FilamentSensor *sensor = platform.GetFilamentSensor(extruder);
+				FilamentSensor *sensor = FilamentSensor::GetFilamentSensor(extruder);
 				if (sensor != nullptr)
 				{
 					// Configure the sensor
 					error = sensor->Configure(gb, reply, seen);
 					if (error)
 					{
-						platform.SetFilamentSensorType(extruder, 0);		// delete the sensor
+						FilamentSensor::SetFilamentSensorType(extruder, 0);		// delete the sensor
 					}
 				}
 				else if (!seen)

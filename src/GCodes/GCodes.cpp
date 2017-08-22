@@ -185,6 +185,7 @@ void GCodes::Reset()
 	moveBuffer.filePos = noFilePosition;
 	lastEndstopStates = platform.GetAllEndstopStates();
 	firmwareUpdateModuleMap = 0;
+	lastFilamentError = FilamentSensorStatus::ok;
 
 	codeQueue->Clear();
 	cancelWait = isWaiting = displayNoToolWarning = displayDeltaNotHomedWarning = false;
@@ -1313,6 +1314,27 @@ void GCodes::CheckTriggers()
 			DoFileMacro(*daemonGCode, filename.Pointer(), true);
 		}
 	}
+	else if (   lastFilamentError != FilamentSensorStatus::ok		// check for a filament error
+			 && reprap.GetPrintMonitor().IsPrinting()
+			 && !isPaused
+			 && LockMovement(*daemonGCode)							// need to lock movement before executing the pause macro
+		 	)
+	{
+		scratchString.printf("Extruder %u reports %s", lastFilamentErrorExtruder, FilamentSensor::GetErrorMessage(lastFilamentError));
+		platform.SendAlert(GENERIC_MESSAGE, scratchString.Pointer(), "Filament error", 1, 0.0, false);
+		DoPause(*daemonGCode, false);
+		lastFilamentError = FilamentSensorStatus::ok;
+	}
+}
+
+// Log a filament error. Called by Platform when a filament sensor reports an incorrect status and a print is in progress.
+void GCodes::FilamentError(size_t extruder, FilamentSensorStatus fstat)
+{
+	if (lastFilamentError == FilamentSensorStatus::ok)
+	{
+		lastFilamentErrorExtruder = extruder;
+		lastFilamentError = fstat;
+	}
 }
 
 // Execute an emergency stop
@@ -1734,7 +1756,10 @@ bool GCodes::LoadExtrusionAndFeedrateFromGCode(GCodeBuffer& gb, int moveType)
 						extrusionAmount *= volumetricExtrusionFactors[drive];
 					}
 					rawExtruderTotalByDrive[drive] += extrusionAmount;
-					rawExtruderTotal += extrusionAmount;
+					if (!doingToolChange)			// don't count extrusion done in tool change macros towards total filament consumed, it distorts the print progress
+					{
+						rawExtruderTotal += extrusionAmount;
+					}
 					moveBuffer.coords[drive + numTotalAxes] = extrusionAmount * extrusionFactors[drive];
 				}
 			}
@@ -1747,11 +1772,14 @@ bool GCodes::LoadExtrusionAndFeedrateFromGCode(GCodeBuffer& gb, int moveType)
 					{
 						const int drive = tool->Drive(eDrive);
 						float extrusionAmount = eMovement[eDrive] * distanceScale;
-						rawExtruderTotalByDrive[drive] += extrusionAmount;
-						rawExtruderTotal += extrusionAmount;
 						if (gb.MachineState().volumetricExtrusion)
 						{
 							extrusionAmount *= volumetricExtrusionFactors[drive];
+						}
+						rawExtruderTotalByDrive[drive] += extrusionAmount;
+						if (!doingToolChange)		// don't count extrusion done in tool change macros towards total filament consumed, it distorts the print progress
+						{
+							rawExtruderTotal += extrusionAmount;
 						}
 						moveBuffer.coords[drive + numTotalAxes] = extrusionAmount * extrusionFactors[drive] * volumetricExtrusionFactors[drive];
 					}
@@ -1784,7 +1812,7 @@ bool GCodes::DoStraightMove(GCodeBuffer& gb, StringRef& reply)
 	// Check to see if the move is a 'homing' move that endstops are checked on.
 	if (gb.Seen('S'))
 	{
-		int ival = gb.GetIValue();
+		const int ival = gb.GetIValue();
 		if (ival == 1 || ival == 2 || ival == 3)
 		{
 			moveBuffer.moveType = ival;
@@ -1866,9 +1894,11 @@ bool GCodes::DoStraightMove(GCodeBuffer& gb, StringRef& reply)
 	}
 #endif
 
-	if (reprap.GetMove().IsRawMotorMove(moveBuffer.moveType))
+	if (moveBuffer.moveType != 0)
 	{
-		// This is a raw motor move, so we need the current raw motor positions in moveBuffer.coords
+		// This may be a raw motor move, in which case we need the current raw motor positions in moveBuffer.coords.
+		// If it isn't a raw motor move, it will still be applied without axis or bed transform applies,
+		// so make sure the initial coordinates don't have those either to avoid unwanted Z movement.
 		reprap.GetMove().GetCurrentUserPosition(moveBuffer.coords, moveBuffer.moveType, reprap.GetCurrentXAxes(), reprap.GetCurrentYAxes());
 	}
 
@@ -1909,10 +1939,9 @@ bool GCodes::DoStraightMove(GCodeBuffer& gb, StringRef& reply)
 				currentUserPosition[axis] = moveArg;
 			}
 		}
-		else if (rp != nullptr)
-		{
-			currentUserPosition[axis] = rp->moveCoords[axis];
-		}
+		// If a restore point is being used (G1 R parameter) then we used to set any coordinates that were not mentioned to the restore point values.
+		// But that causes issues for tool change on IDEX machines because we end up restoring the U axis when we shouldn't.
+		// So we no longer do that, and the user must mention any axes that he wants restored e.g. G1 R2 X0 Y0.
 	}
 
 	// Deal with extrusion and feed rate
@@ -2850,6 +2879,15 @@ void GCodes::QueueFileToPrint(const char* fileName)
 	{
 		platform.MessageF(GENERIC_MESSAGE, "GCode file \"%s\" not found\n", fileName);
 	}
+}
+
+// Start printing the file already selected
+void GCodes::StartPrinting()
+{
+	fileGCode->OriginalMachineState().fileState.MoveFrom(fileToPrint);
+	fileInput->Reset();
+	lastFilamentError = FilamentSensorStatus::ok;
+	reprap.GetPrintMonitor().StartedPrint();
 }
 
 void GCodes::DeleteFile(const char* fileName)

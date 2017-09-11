@@ -380,7 +380,7 @@ void RepRap::DeleteTool(Tool* tool)
 	// Deselect it if necessary
 	if (GetCurrentTool() == tool)
 	{
-		SelectTool(-1);
+		SelectTool(-1, false);
 	}
 
 	// Switch off any associated heater and remove heater references
@@ -411,7 +411,7 @@ void RepRap::DeleteTool(Tool* tool)
 	platform->UpdateConfiguredHeaters();
 }
 
-void RepRap::SelectTool(int toolNumber)
+void RepRap::SelectTool(int toolNumber, bool simulating)
 {
 	Tool* tool = toolList;
 
@@ -419,7 +419,10 @@ void RepRap::SelectTool(int toolNumber)
 	{
 		if (tool->Number() == toolNumber)
 		{
-			tool->Activate(currentTool);
+			if (!simulating)
+			{
+				tool->Activate(currentTool);
+			}
 			currentTool = tool;
 			return;
 		}
@@ -427,7 +430,7 @@ void RepRap::SelectTool(int toolNumber)
 	}
 
 	// Selecting a non-existent tool is valid.  It sets them all to standby.
-	if (currentTool != nullptr)
+	if (currentTool != nullptr && !simulating)
 	{
 		StandbyTool(currentTool->Number());
 	}
@@ -1460,22 +1463,6 @@ OutputBuffer *RepRap::GetLegacyStatusResponse(uint8_t type, int seq)
 	return response;
 }
 
-// Copy some parameter text, stopping at the first control character or when the destination buffer is full, and removing trailing spaces
-void RepRap::CopyParameterText(const char* src, char *dst, size_t length)
-{
-	size_t i;
-	for (i = 0; i + 1 < length && src[i] >= ' '; ++i)
-	{
-		dst[i] = src[i];
-	}
-	// Remove any trailing spaces
-	while (i > 0 && dst[i - 1] == ' ')
-	{
-		--i;
-	}
-	dst[i] = 0;
-}
-
 // Get the list of files in the specified directory in JSON format.
 // If flagDirs is true then we prefix each directory with a * character.
 OutputBuffer *RepRap::GetFilesResponse(const char *dir, bool flagsDirs)
@@ -1692,7 +1679,7 @@ bool RepRap::CheckPassword(const char *pw) const
 void RepRap::SetPassword(const char* pw)
 {
 	// Users sometimes put a tab character between the password and the comment, so allow for this
-	CopyParameterText(pw, password, ARRAY_SIZE(password));
+	SafeStrncpy(password, pw, ARRAY_SIZE(password));
 }
 
 const char *RepRap::GetName() const
@@ -1703,7 +1690,7 @@ const char *RepRap::GetName() const
 void RepRap::SetName(const char* nm)
 {
 	// Users sometimes put a tab character between the machine name and the comment, so allow for this
-	CopyParameterText(nm, myName, ARRAY_SIZE(myName));
+	SafeStrncpy(myName, nm, ARRAY_SIZE(myName));
 
 	// Set new DHCP hostname
 	network->SetHostname(myName);

@@ -3151,7 +3151,6 @@ bool GCodes::HandleMcode(GCodeBuffer& gb, StringRef& reply)
 				if (gb.Seen(axisLetters[axis]))
 				{
 					// Get parameters first and check them
-					const float probeRadius = gb.GetFValue();
 					const int endStopToUse = gb.Seen('E') ? gb.GetIValue() : 0;
 					if (endStopToUse < 0 || endStopToUse > (int)DRIVES)
 					{
@@ -3160,21 +3159,20 @@ bool GCodes::HandleMcode(GCodeBuffer& gb, StringRef& reply)
 						break;
 					}
 
-					// Set up initial coordinates
-					reprap.GetMove().GetCurrentUserPosition(moveBuffer.coords, moveBuffer.moveType, reprap.GetCurrentXAxes(), reprap.GetCurrentYAxes());
-					memcpy(moveBuffer.initialCoords, moveBuffer.coords, numVisibleAxes * sizeof(moveBuffer.initialCoords[0]));
+					// Save the current axis coordinates
+					memcpy(toolChangeRestorePoint.moveCoords, currentUserPosition, ARRAY_SIZE(currentUserPosition) * sizeof(currentUserPosition[0]));
 
 					// Prepare another move similar to G1 .. S3
 					moveBuffer.moveType = 3;
-					moveBuffer.endStopsToCheck = 0;
 					if (endStopToUse == 0)
 					{
+						moveBuffer.endStopsToCheck = 0;
 						SetBit(moveBuffer.endStopsToCheck, axis);
 					}
 					else
 					{
+						moveBuffer.endStopsToCheck = UseSpecialEndstop;
 						SetBit(moveBuffer.endStopsToCheck, endStopToUse);
-						SetBit(moveBuffer.endStopsToCheck, UseSpecialEndstop);
 					}
 					moveBuffer.xAxes = DefaultXAxisMapping;
 					moveBuffer.yAxes = DefaultYAxisMapping;
@@ -3185,7 +3183,7 @@ bool GCodes::HandleMcode(GCodeBuffer& gb, StringRef& reply)
 
 					// Decide which way and how far to go
 					const float axisLength = platform.AxisMaximum(axis) - platform.AxisMinimum(axis) + 5.0;
-					moveBuffer.coords[axis] = (probeRadius < 0.0) ? axisLength * -1.0 : axisLength;
+					moveBuffer.coords[axis] = (gb.Seen('S') && gb.GetIValue() == 1) ? axisLength * -1.0 : axisLength;
 
 					// Zero every extruder drive
 					for (size_t drive = numTotalAxes; drive < DRIVES; drive++)

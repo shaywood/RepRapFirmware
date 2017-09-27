@@ -104,6 +104,9 @@ const Pin SpiTempSensorCsPins[MaxSpiTempSensors] = { 28, 50, 51, 52, 24, 97, 98,
 
 #endif
 
+// DHTxx data pin
+const Pin DhtDataPin = 97;												// Pin CS6
+
 // Arduino Due pin number that controls the ATX power on/off
 const Pin ATX_POWER_PIN = 79;											// Arduino Due pin number that controls the ATX power on/off
 

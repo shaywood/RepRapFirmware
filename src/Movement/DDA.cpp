@@ -1297,8 +1297,7 @@ void DDA::CheckEndstops(Platform& platform)
 	}
 	else if ((endStopsToCheck & UseSpecialEndstop) != 0)			// use only one (probably non-default) endstop while probing a tool offset
 	{
-		const size_t numAxes = reprap.GetGCodes().GetTotalAxes();
-		for (size_t drive = 0; drive < numAxes; ++drive)
+		for (size_t drive = 0; drive < DRIVES; ++drive)
 		{
 			if (IsBitSet(endStopsToCheck, drive))
 			{

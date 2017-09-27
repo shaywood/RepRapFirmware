@@ -329,8 +329,14 @@ void GCodes::Spin()
 				{
 					if (gb.Seen(axisLetters[axis]))
 					{
-						reply.printf("Probed tool offset for %c axis:\nCoord before: %.1f after %.1f\nProbe radius: %f",
-								axisLetters[axis], moveBuffer.initialCoords[axis], moveBuffer.coords[axis], gb.GetFValue());
+						// We get here when the tool probe has been activated. In this case we know how far we
+						// went (i.e. the difference between our start and end positions) and if we need to
+						// incorporate any correction factors. That's why we only need to set the final tool
+						// offset to this value in order to finish the tool probing.
+						float offset[MaxAxes];
+						memcpy(offset, reprap.GetCurrentTool()->GetOffset(), sizeof(offset[0]) * sizeof(float));
+						offset[axis] = (currentUserPosition[axis] - toolChangeRestorePoint.moveCoords[axis]) + gb.GetFValue();
+						reprap.GetCurrentTool()->SetOffset(offset);
 						break;
 					}
 				}
@@ -790,7 +796,7 @@ void GCodes::Spin()
 			}
 			break;
 
-		case GCodeState::gridprobing6:
+		case GCodeState::gridProbing6:
 			// Finished probing the grid, and retracted the probe if necessary
 			{
 				float mean, deviation;

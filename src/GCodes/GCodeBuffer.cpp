@@ -177,7 +177,7 @@ bool GCodeBuffer::Put(const char *str, size_t len)
 		}
 	}
 
-	return false;
+	return Put('\n');	// in case there wasn't one at the ending
 }
 
 void GCodeBuffer::SetFinished(bool f)

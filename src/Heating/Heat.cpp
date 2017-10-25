@@ -80,7 +80,7 @@ void Heat::Init()
 		{
 			pids[heater]->Init(DefaultBedHeaterGain, DefaultBedHeaterTimeConstant, DefaultBedHeaterDeadTime, DefaultBedTemperatureLimit, false);
 		}
-#if !defined(DUET_NG) && !defined(__RADDS__) && !defined(__ALLIGATOR__)
+#if defined(DUET_06_085)
 		else if (heater == Heaters - 1)
 		{
 			// On the Duet 085, the heater 6 pin is also the fan 1 pin. By default we support fan 1, so disable heater 6.
@@ -102,7 +102,7 @@ void Heat::Init()
 	}
 
 	// Set up default virtual heaters for MCU temperature and TMC driver overheat sensors
-#ifndef __RADDS__
+#if HAS_CPU_TEMP_SENSOR
 	virtualHeaterSensors[0] = TemperatureSensor::Create(CpuTemperatureSenseChannel);
 	virtualHeaterSensors[0]->SetHeaterName("MCU");				// name this virtual heater so that it appears in DWC
 #endif
@@ -112,7 +112,7 @@ void Heat::Init()
 #endif
 
 	lastTime = millis() - platform.HeatSampleInterval();		// flag the PIDS as due for spinning
-	longWait = platform.Time();
+	longWait = millis();
 	coldExtrude = false;
 	active = true;
 }
@@ -163,7 +163,7 @@ void Heat::Diagnostics(MessageType mtype)
 	{
 		if (pids[heater]->Active())
 		{
-			platform.MessageF(mtype, "Heater %d is on, I-accum = %.1f\n", heater, pids[heater]->GetAccumulator());
+			platform.MessageF(mtype, "Heater %d is on, I-accum = %.1f\n", heater, (double)(pids[heater]->GetAccumulator()));
 		}
 	}
 }
@@ -505,6 +505,8 @@ void Heat::SuspendHeaters(bool sus)
 	}
 }
 
+#endif
+
 // Save some resume information returning true if successful.
 // We assume that the bed and chamber heaters are either on and active, or off (not on standby).
 bool Heat::WriteBedAndChamberTempSettings(FileStore *f) const
@@ -513,15 +515,13 @@ bool Heat::WriteBedAndChamberTempSettings(FileStore *f) const
 	StringRef buf(bufSpace, ARRAY_SIZE(bufSpace));
 	if (bedHeater >= 0 && pids[bedHeater]->Active() && !pids[bedHeater]->SwitchedOff())
 	{
-		buf.printf("M140 S%.1f\n", GetActiveTemperature(bedHeater));
+		buf.printf("M140 S%.1f\n", (double)GetActiveTemperature(bedHeater));
 	}
 	if (chamberHeater >= 0 && pids[chamberHeater]->Active() && !pids[chamberHeater]->SwitchedOff())
 	{
-		buf.printf("M141 S%.1f\n", GetActiveTemperature(chamberHeater));
+		buf.printf("M141 S%.1f\n", (double)GetActiveTemperature(chamberHeater));
 	}
 	return (buf.Length() == 0) || f->Write(buf.Pointer());
 }
-
-#endif
 
 // End

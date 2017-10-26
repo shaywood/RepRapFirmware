@@ -106,6 +106,7 @@ Tool * Tool::freelist = nullptr;
 	{
 		t->offset[axis] = 0.0;
 	}
+	t->saveOffsets = false;
 
 	for (size_t drive = 0; drive < t->driveCount; drive++)
 	{
@@ -423,8 +424,39 @@ void Tool::DefineMix(const float m[])
 	}
 }
 
-// Write the tool's settings to file returning true if successful
-bool Tool::WriteSettings(FileStore *f) const
+// Write the tool's probed settings to file returning true if successful
+bool Tool::WritePersistentSettings(FileStore *f, bool &headerWritten) const
+{
+	char bufSpace[64];
+	StringRef buf(bufSpace, ARRAY_SIZE(bufSpace));
+
+	// Store the tool offsets only if they were either loaded from
+	// config-override.g before or if they were probed via M585
+	if (saveOffsets)
+	{
+		if (!headerWritten)
+		{
+			headerWritten = true;
+			if (!f->Write("; Tool parameters\n"))
+			{
+				return false;
+			}
+		}
+
+		buf.printf("G10 P%d", myNumber);
+		for (size_t axis = 0; axis < reprap.GetGCodes().GetTotalAxes(); axis++)
+		{
+			buf.catf(" %c%.2f", GCodes::axisLetters[axis], offset[axis]);
+		}
+		buf.cat('\n');
+		return f->Write(buf.Pointer());
+	}
+
+	return true;
+}
+
+// Write the tool's current settings to file returning true if successful
+bool Tool::WriteVolatileSettings(FileStore *f) const
 {
 	char bufSpace[50];
 	StringRef buf(bufSpace, ARRAY_SIZE(bufSpace));
@@ -453,7 +485,7 @@ bool Tool::WriteSettings(FileStore *f) const
 
 	if (ok && state != ToolState::off)
 	{
-		// Select tool
+		// Select tool without calling any macros
 		buf.printf("T%d P0\n", myNumber);
 		ok = f->Write(buf.Pointer());
 	}
@@ -461,12 +493,13 @@ bool Tool::WriteSettings(FileStore *f) const
 	return ok;
 }
 
-void Tool::SetOffsets(const float offs[MaxAxes])
+void Tool::SetOffsets(const float offs[MaxAxes], bool offsetsProbed)
 {
 	for(size_t i = 0; i < MaxAxes; ++i)
 	{
 		offset[i] = offs[i];
 	}
+	saveOffsets |= offsetsProbed;
 }
 
 // End

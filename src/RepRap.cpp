@@ -1725,9 +1725,20 @@ AxesBitmap RepRap::GetCurrentYAxes() const
 	return (currentTool == nullptr) ? DefaultYAxisMapping : currentTool->GetYAxisMap();
 }
 
+// Save physical properties of the tools like probed tool offsets to a file
+bool RepRap::WritePersistentToolSettings(FileStore *f) const
+{
+	bool ok = true, headerWritten = false;
+	for (const Tool *t = toolList; t != nullptr && ok; t = t->Next())
+	{
+		ok = t->WritePersistentSettings(f, headerWritten);
+	}
+	return ok;
+}
+
 // Save some resume information, returning true if successful
 // We assume that the tool configuration doesn't change, only the temperatures and the mix
-bool RepRap::WriteToolSettings(FileStore *f) const
+bool RepRap::WriteVolatileToolSettings(FileStore *f) const
 {
 	// First write the settings of all tools except the current one and the command to select them if they are on standby
 	bool ok = true;
@@ -1735,14 +1746,14 @@ bool RepRap::WriteToolSettings(FileStore *f) const
 	{
 		if (t != currentTool)
 		{
-			ok = t->WriteSettings(f);
+			ok = t->WriteVolatileSettings(f);
 		}
 	}
 
 	// Finally write the setting of the active tool and the commands to select it
 	if (ok && currentTool != nullptr)
 	{
-		ok = currentTool->WriteSettings(f);
+		ok = currentTool->WriteVolatileSettings(f);
 	}
 	return ok;
 }

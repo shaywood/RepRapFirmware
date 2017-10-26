@@ -336,7 +336,7 @@ void GCodes::Spin()
 						// incorporate any correction factors. That's why we only need to set the final tool
 						// offset to this value in order to finish the tool probing.
 						const float offset = currentUserPosition[axis] - toolChangeRestorePoint.moveCoords[axis] + gb.GetFValue();
-						reprap.GetCurrentTool()->SetOffset(axis, offset);
+						reprap.GetCurrentTool()->SetOffset(axis, offset, true);
 						break;
 					}
 				}
@@ -1058,7 +1058,7 @@ void GCodes::Spin()
 				else
 				{
 					const float *offsets = tool->GetOffsets();
-					tool->SetOffset(Z_AXIS, offsets[Z_AXIS] + g30zHeightError);
+					tool->SetOffset(Z_AXIS, offsets[Z_AXIS] + g30zHeightError, true);
 				}
 			}
 			else
@@ -1611,7 +1611,7 @@ void GCodes::SaveResumeInfo()
 			buf.cat('\n');
 			bool ok = f->Write(buf.Pointer())
 					&& reprap.GetHeat().WriteBedAndChamberTempSettings(f)	// turn on bed and chamber heaters
-					&& reprap.WriteToolSettings(f)							// set tool temperatures, tool mix ratios etc.
+					&& reprap.WriteVolatileToolSettings(f)					// set tool temperatures, tool mix ratios etc.
 					&& reprap.GetMove().WriteResumeSettings(f);				// load grid, if we are using one
 			if (ok)
 			{
@@ -2259,7 +2259,7 @@ void GCodes::ClearMove()
 
 // Run a file macro. Prior to calling this, 'state' must be set to the state we want to enter when the macro has been completed.
 // Return true if the file was found or it wasn't and we were asked to report that fact.
-bool GCodes::DoFileMacro(GCodeBuffer& gb, const char* fileName, bool reportMissing, bool runningM502)
+bool GCodes::DoFileMacro(GCodeBuffer& gb, const char* fileName, bool reportMissing, FileMacroOptions options)
 {
 	FileStore * const f = platform.GetFileStore(platform.GetSysDir(), fileName, OpenMode::read);
 	if (f == nullptr)
@@ -2279,7 +2279,8 @@ bool GCodes::DoFileMacro(GCodeBuffer& gb, const char* fileName, bool reportMissi
 	}
 	gb.MachineState().fileState.Set(f);
 	gb.MachineState().doingFileMacro = true;
-	gb.MachineState().runningM502 = runningM502;
+	gb.MachineState().runningM501 = (options == FileMacroOptions::runningM501);
+	gb.MachineState().runningM502 = (options == FileMacroOptions::runningM502);
 	gb.SetState(GCodeState::normal);
 	gb.Init();
 	return true;
@@ -2987,10 +2988,7 @@ GCodeResult GCodes::DoDwell(GCodeBuffer& gb)
 		simulationTime += (float)dwell * 0.001;
 		return GCodeResult::ok;
 	}
-	else
-	{
-		return DoDwellTime(gb, (uint32_t)dwell);
-	}
+	return DoDwellTime(gb, (uint32_t)dwell);
 }
 
 GCodeResult GCodes::DoDwellTime(GCodeBuffer& gb, uint32_t dwellMillis)
@@ -3058,7 +3056,7 @@ GCodeResult GCodes::SetOrReportOffsets(GCodeBuffer &gb, StringRef& reply)
 		{
 			return GCodeResult::notFinished;
 		}
-		tool->SetOffsets(offset);
+		tool->SetOffsets(offset, gb.MachineState().runningM501);
 	}
 
 	// Deal with setting temperatures
@@ -4142,6 +4140,10 @@ bool GCodes::WriteConfigOverrideFile(StringRef& reply, const char *fileName) con
 	if (ok)
 	{
 		ok = reprap.GetHeat().WriteModelParameters(f);
+	}
+	if (ok)
+	{
+		ok = reprap.WritePersistentToolSettings(f);
 	}
 	if (ok)
 	{

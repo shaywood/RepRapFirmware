@@ -104,7 +104,8 @@ public:
 	void SetAlert(const char *msg, const char *title, int mode, float timeout, AxesBitmap controls);
 	void ClearAlert();
 
-	bool WriteToolSettings(FileStore *f) const;				// Save some resume information
+	bool WritePersistentToolSettings(FileStore *f) const;	// Save persistent tool information
+	bool WriteVolatileToolSettings(FileStore *f) const;		// Save some resume information
 
 	static uint32_t DoDivide(uint32_t a, uint32_t b);		// helper function for diagnostic tests
 	static uint32_t ReadDword(const char* p);				// helper function for diagnostic tests

@@ -48,8 +48,9 @@ public:
 	static void Delete(Tool *t);
 
 	const float *GetOffsets() const;
-	void SetOffsets(const float offs[MaxAxes]);
-	void SetOffset(size_t axis, float offs) pre(axis < MaxAxes);
+	void SetOffsets(const float offs[MaxAxes], bool offsetsProbed);
+	void SetOffset(size_t axis, float offs, bool offsetProbed) pre(axis < MaxAxes);
+	const bool OffsetsProbed() const { return saveOffsets; }
 	size_t DriveCount() const;
 	int Drive(size_t driveNumber) const;
 	bool ToolCanDrive(bool extrude);
@@ -70,7 +71,8 @@ public:
 	Filament *GetFilament() const { return filament; }
 	Tool *Next() const { return next; }
 	ToolState GetState() const { return state; }
-	bool WriteSettings(FileStore *f) const;			// write the tool's settings to file
+	bool WritePersistentSettings(FileStore *f, bool &headerWritten) const;		// write the tool's probed physical properties to file
+	bool WriteVolatileSettings(FileStore *f) const;								// write the tool's current settings to file
 
 	friend class RepRap;
 
@@ -99,6 +101,7 @@ private:
 	float standbyTemperatures[Heaters];
 	size_t heaterCount;
 	float offset[MaxAxes];
+	bool saveOffsets;
 	AxesBitmap xMapping, yMapping;
 	FansBitmap fanMapping;
 	Filament *filament;
@@ -149,9 +152,10 @@ inline const float *Tool::GetOffsets() const
 	return offset;
 }
 
-inline void Tool::SetOffset(size_t axis, float offs)
+inline void Tool::SetOffset(size_t axis, float offs, bool offsetProbed)
 {
 	offset[axis] = offs;
+	saveOffsets |= offsetProbed;
 }
 
 #endif /* TOOL_H_ */

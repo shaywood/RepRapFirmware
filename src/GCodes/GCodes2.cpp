@@ -2251,14 +2251,14 @@ bool GCodes::HandleMcode(GCodeBuffer& gb, StringRef& reply)
 		break;
 
 	case 501: // Load parameters from EEPROM
-		DoFileMacro(gb, "config-override.g", true);
+		DoFileMacro(gb, CONFIG_OVERRIDE_G, true, FileMacroOptions::runningM501);
 		break;
 
 	case 502: // Revert to default "factory settings"
 		reprap.GetHeat().ResetHeaterModels();							// in case some heaters have no M307 commands in config.g
 		reprap.GetMove().GetKinematics().SetCalibrationDefaults();		// in case M665/M666/M667/M669 in config.g don't define all the parameters
 		platform.SetZProbeDefaults();
-		DoFileMacro(gb, "config.g", true, true);
+		DoFileMacro(gb, reprap.GetPlatform().GetConfigFile(), true, FileMacroOptions::runningM502);
 		break;
 
 	case 503: // List variable settings
@@ -3314,7 +3314,10 @@ bool GCodes::HandleMcode(GCodeBuffer& gb, StringRef& reply)
 			break;
 		}
 
-		if (LockMovementAndWaitForStandstill(gb))
+		if (!LockMovementAndWaitForStandstill(gb))
+		{
+			return false;
+		}
 		{
 			for (size_t axis = 0; axis < numTotalAxes; axis++)
 			{
@@ -3373,7 +3376,6 @@ bool GCodes::HandleMcode(GCodeBuffer& gb, StringRef& reply)
 					// Kick off new movement
 					segmentsLeft = 1;
 					gb.SetState(GCodeState::probingToolOffset);
-					break;
 				}
 			}
 		}

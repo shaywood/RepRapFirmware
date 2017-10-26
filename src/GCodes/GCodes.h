@@ -198,7 +198,14 @@ private:
 
 	void StartNextGCode(GCodeBuffer& gb, StringRef& reply);				// Fetch a new or old GCode and process it
 	void DoFilePrint(GCodeBuffer& gb, StringRef& reply);				// Get G Codes from a file and print them
-	bool DoFileMacro(GCodeBuffer& gb, const char* fileName, bool reportMissing, bool runningM502 = false);
+
+	enum class FileMacroOptions
+	{
+		none,
+		runningM501,
+		runningM502
+	};
+	bool DoFileMacro(GCodeBuffer& gb, const char* fileName, bool reportMissing, FileMacroOptions options = FileMacroOptions::none);
 																		// Run a GCode macro file, optionally report error if not found
 	void FileMacroCyclesReturn(GCodeBuffer& gb);						// End a macro
 

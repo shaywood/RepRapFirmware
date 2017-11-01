@@ -1362,6 +1362,7 @@ void Platform::Spin()
 			// Poll one TMC2660 for temperature warning or temperature shutdown
 			if (enableValues[nextDriveToPoll] >= 0)				// don't poll driver if it is flagged "no poll"
 			{
+				SmartDrivers::Poll(nextDriveToPoll);
 				const uint32_t stat = SmartDrivers::GetStatus(nextDriveToPoll);
 				const DriversBitmap mask = MakeBitmap<DriversBitmap>(nextDriveToPoll);
 				if (stat & TMC_RR_OT)
@@ -1553,7 +1554,7 @@ void Platform::DisableAutoSave()
 
 bool Platform::IsPowerOk() const
 {
-	return currentVin > autoPauseReading;
+	return !autoSaveEnabled || currentVin > autoPauseReading;
 }
 
 void Platform::EnableAutoSave(float saveVoltage, float resumeVoltage)
@@ -2295,10 +2296,22 @@ EndStopHit Platform::GetZProbeResult() const
 // Write the platform parameters to file
 bool Platform::WritePlatformParameters(FileStore *f) const
 {
-	bool ok = WriteAxisLimits(f, axisMinimaProbed, axisMinima, 1);
-	if (ok)
+	bool ok;
+	if (axisMinimaProbed != 0 || axisMaximaProbed != 0)
 	{
-		ok = WriteAxisLimits(f, axisMaximaProbed, axisMaxima, 0);
+		ok = f->Write("; Probed axis limits\n");
+		if (ok)
+		{
+			ok = WriteAxisLimits(f, axisMinimaProbed, axisMinima, 1);
+		}
+		if (ok)
+		{
+			ok = WriteAxisLimits(f, axisMaximaProbed, axisMaxima, 0);
+		}
+	}
+	else
+	{
+		ok = true;
 	}
 
 #if 0	// From version 1.20 we no longer write the Z probe parameters, but keep the code for now in case too many users complain

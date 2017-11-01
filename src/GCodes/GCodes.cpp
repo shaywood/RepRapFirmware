@@ -3102,6 +3102,7 @@ GCodeResult GCodes::DoDwell(GCodeBuffer& gb)
 		simulationTime += (float)dwell * 0.001;
 		return GCodeResult::ok;
 	}
+
 	return DoDwellTime(gb, (uint32_t)dwell);
 }
 

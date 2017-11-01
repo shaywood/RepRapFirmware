@@ -33,21 +33,21 @@ uint32_t PID::tuningPeakDelay;				// how many milliseconds the temperature conti
 
 // Member functions and constructors
 
-PID::PID(Platform& p, int8_t h) : platform(p), heater(h), mode(HeaterMode::off)
+PID::PID(Platform& p, int8_t h) : platform(p), heater(h), mode(HeaterMode::off), invertPwmSignal(false)
 {
 }
 
 inline void PID::SetHeater(float power) const
 {
-	platform.SetHeater(heater, power);
+	platform.SetHeater(heater, invertPwmSignal ? (1.0 - power) : power);
 }
 
-void PID::Init(float pGain, float pTc, float pTd, float tempLimit, bool usePid)
+void PID::Init(float pGain, float pTc, float pTd, float tempLimit, bool usePid, bool inverted)
 {
 	temperatureLimit = tempLimit;
 	maxTempExcursion = DefaultMaxTempExcursion;
 	maxHeatingFaultTime = DefaultMaxHeatingFaultTime;
-	model.SetParameters(pGain, pTc, pTd, 1.0, tempLimit, usePid);
+	model.SetParameters(pGain, pTc, pTd, 1.0, tempLimit, usePid, inverted);
 	Reset();
 
 	if (model.IsEnabled())
@@ -80,10 +80,10 @@ void PID::Reset()
 }
 
 // Set the process model
-bool PID::SetModel(float gain, float tc, float td, float maxPwm, bool usePid)
+bool PID::SetModel(float gain, float tc, float td, float maxPwm, bool usePid, bool inverted)
 {
 	const float temperatureLimit = reprap.GetHeat().GetTemperatureLimit(heater);
-	const bool rslt = model.SetParameters(gain, tc, td, maxPwm, temperatureLimit, usePid);
+	const bool rslt = model.SetParameters(gain, tc, td, maxPwm, temperatureLimit, usePid, inverted);
 	if (rslt)
 	{
 #if defined(DUET_06_085)
@@ -370,6 +370,12 @@ void PID::Spin()
 				{
 					// Using bang-bang mode
 					lastPwm = (error > 0.0) ? model.GetMaxPwm() : 0.0;
+				}
+
+				// Check if the generated PWM signal needs to be inverted for inverse temperature control
+				if (model.IsInverted())
+				{
+					lastPwm = model.GetMaxPwm() - lastPwm;
 				}
 			}
 			else
@@ -828,7 +834,7 @@ void PID::CalculateModel()
 	//const float td = (float)(tuningPeakDelay + 500) * 0.00065;		// take the dead time as 65% of the delay to peak rounded up to a half second
 	const float td = tc * logf((gain + tuningStartTemp - tuningHeaterOffTemp)/(gain + tuningStartTemp - tuningPeakTemperature)) * 1.3;
 
-	tuned = SetModel(gain, tc, td, tuningPwm, true);
+	tuned = SetModel(gain, tc, td, tuningPwm, true, false);
 	if (tuned)
 	{
 		platform.MessageF(LoggedGenericMessage,

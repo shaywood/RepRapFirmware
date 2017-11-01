@@ -373,7 +373,7 @@ void GCodes::RunStateMachine(GCodeBuffer& gb, StringRef& reply)
 						// went (i.e. the difference between our start and end positions) and if we need to
 						// incorporate any correction factors. That's why we only need to set the final tool
 						// offset to this value in order to finish the tool probing.
-						currentTool->SetOffset(axis, (currentUserPosition[axis] - toolChangeRestorePoint.moveCoords[axis]) + gb.GetFValue(), true);
+						currentTool->SetOffset(axis, (toolChangeRestorePoint.moveCoords[axis] - currentUserPosition[axis]) + gb.GetFValue(), true);
 						break;
 					}
 				}
@@ -486,9 +486,15 @@ void GCodes::RunStateMachine(GCodeBuffer& gb, StringRef& reply)
 
 	case GCodeState::toolChangeComplete:
 	case GCodeState::m109ToolChangeComplete:
+		// Get current position after tool change
+		reprap.GetMove().GetCurrentUserPosition(moveBuffer.coords, 0, reprap.GetCurrentXAxes(), reprap.GetCurrentYAxes());
+		memcpy(moveBuffer.initialCoords, moveBuffer.coords, numVisibleAxes * sizeof(moveBuffer.initialCoords[0]));
+		ToolOffsetInverseTransform(moveBuffer.coords, currentUserPosition);
+
 		// Restore the original Z axis user position, so that different tool Z offsets work even if the first move after the tool change doesn't have a Z coordinate
-		currentUserPosition[Z_AXIS] = toolChangeRestorePoint.moveCoords[Z_AXIS];
-		gb.MachineState().feedrate = toolChangeRestorePoint.feedRate;
+		/*currentUserPosition[Z_AXIS] = toolChangeRestorePoint.moveCoords[Z_AXIS];
+		gb.MachineState().feedrate = toolChangeRestorePoint.feedRate;*/
+
 		// We don't restore the default fan speed in case the user wants to use a different one for the new tool
 		doingToolChange = false;
 

@@ -96,7 +96,13 @@ public:
 	const FopDt& GetHeaterModel(size_t heater) const			// Get the process model for the specified heater
 	pre(heater < Heaters);
 
-	bool SetHeaterModel(size_t heater, float gain, float tc, float td, float maxPwm, bool usePid) // Set the heater process model
+	bool SetHeaterModel(size_t heater, float gain, float tc, float td, float maxPwm, bool usePid, bool inverted) // Set the heater process model
+	pre(heater < Heaters);
+
+	bool IsHeaterSignalInverted(size_t heater)					// Set PWM signal inversion
+	pre(heater < Heaters);
+
+	void SetHeaterSignalInverted(size_t heater, bool IsInverted)	// Set PWM signal inversion
 	pre(heater < Heaters);
 
 	void GetHeaterProtection(size_t heater, float& maxTempExcursion, float& maxFaultTime) const
@@ -187,9 +193,19 @@ inline const FopDt& Heat::GetHeaterModel(size_t heater) const
 }
 
 // Set the heater process model
-inline bool Heat::SetHeaterModel(size_t heater, float gain, float tc, float td, float maxPwm, bool usePid)
+inline bool Heat::SetHeaterModel(size_t heater, float gain, float tc, float td, float maxPwm, bool usePid, bool inverted)
 {
-	return pids[heater]->SetModel(gain, tc, td, maxPwm, usePid);
+	return pids[heater]->SetModel(gain, tc, td, maxPwm, usePid, inverted);
+}
+
+inline bool Heat::IsHeaterSignalInverted(size_t heater)
+{
+	return pids[heater]->IsHeaterSignalInverted();
+}
+
+inline void Heat::SetHeaterSignalInverted(size_t heater, bool IsInverted)
+{
+	pids[heater]->SetHeaterSignalInverted(IsInverted);
 }
 
 // Is the heater enabled?

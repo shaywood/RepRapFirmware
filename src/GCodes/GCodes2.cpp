@@ -2014,19 +2014,25 @@ bool GCodes::HandleMcode(GCodeBuffer& gb, StringRef& reply)
 					td = model.GetDeadTime(),
 					maxPwm = model.GetMaxPwm();
 				int32_t dontUsePid = model.UsePid() ? 0 : 1;
+				int32_t inversionParameter = 0;
 
 				gb.TryGetFValue('A', gain, seen);
 				gb.TryGetFValue('C', tc, seen);
 				gb.TryGetFValue('D', td, seen);
 				gb.TryGetIValue('B', dontUsePid, seen);
 				gb.TryGetFValue('S', maxPwm, seen);
+				gb.TryGetIValue('I', inversionParameter, seen);
 
 				if (seen)
 				{
-					if (!reprap.GetHeat().SetHeaterModel(heater, gain, tc, td, maxPwm, dontUsePid == 0))
+					const bool inverseTemperatureControl = (inversionParameter == 1 || inversionParameter == 3);
+					if (!reprap.GetHeat().SetHeaterModel(heater, gain, tc, td, maxPwm, dontUsePid == 0, inverseTemperatureControl))
 					{
 						reply.copy("Error: bad model parameters");
 					}
+
+					const bool invertedPwmSignal = (inversionParameter == 2 || inversionParameter == 3);
+					reprap.GetHeat().SetHeaterSignalInverted(heater, invertedPwmSignal);
 				}
 				else if (!model.IsEnabled())
 				{
@@ -2037,8 +2043,13 @@ bool GCodes::HandleMcode(GCodeBuffer& gb, StringRef& reply)
 					const char* mode = (!model.UsePid()) ? "bang-bang"
 										: (model.ArePidParametersOverridden()) ? "custom PID"
 											: "PID";
-					reply.printf("Heater %u model: gain %.1f, time constant %.1f, dead time %.1f, max PWM %.2f, mode: %s",
-							heater, (double)model.GetGain(), (double)model.GetTimeConstant(), (double)model.GetDeadTime(), (double)model.GetMaxPwm(), mode);
+					const bool pwmSignalInverted = reprap.GetHeat().IsHeaterSignalInverted(heater);
+					const char* inverted = model.IsInverted()
+											? (pwmSignalInverted ? "PWM signal and temperature control" : "temperature control")
+											: (pwmSignalInverted ? "PWM signal" : "no");
+
+					reply.printf("Heater %u model: gain %.1f, time constant %.1f, dead time %.1f, max PWM %.2f, mode: %s inverted: %s",
+							heater, (double)model.GetGain(), (double)model.GetTimeConstant(), (double)model.GetDeadTime(), (double)model.GetMaxPwm(), mode, inverted);
 					if (model.UsePid())
 					{
 						// When reporting the PID parameters, we scale them by 255 for compatibility with older firmware and other firmware

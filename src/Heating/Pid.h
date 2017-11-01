@@ -39,7 +39,7 @@ class PID
 public:
 
 	PID(Platform& p, int8_t h);
-	void Init(float pGain, float pTc, float pTd, float tempLimit, bool usePid);	// (Re)Set everything to start
+	void Init(float pGain, float pTc, float pTd, float tempLimit, bool usePid, bool inverted);	// (Re)Set everything to start
 	void Reset();
 	void Spin();									// Called in a tight loop to keep things running
 	void SetActiveTemperature(float t);
@@ -66,7 +66,12 @@ public:
 	const FopDt& GetModel() const					// Get the process model
 		{ return model; }
 
-	bool SetModel(float gain, float tc, float td, float maxPwm, bool usePid);	// Set the process model
+	bool SetModel(float gain, float tc, float td, float maxPwm, bool usePid, bool inverted);	// Set the process model
+
+	bool IsHeaterSignalInverted() const				// Is the PWM output signal inverted?
+		{ return invertPwmSignal; }
+	void SetHeaterSignalInverted(bool inverted)		// Set PWM output signal inversion
+		{ invertPwmSignal = inverted; }
 
 	bool IsHeaterEnabled() const					// Is this heater enabled?
 		{ return model.IsEnabled(); }
@@ -119,6 +124,7 @@ private:
 	int8_t heater;									// The index of our heater
 	uint8_t previousTemperaturesGood;				// Bitmap indicating which previous temperature were good readings
 	HeaterMode mode;								// Current state of the heater
+	bool invertPwmSignal;							// Invert the final PWM output signal (same behaviour as with HEAT_ON in earlier firmware versions)
 	bool active;									// Are we active or standby?
 	bool tuned;										// True if tuning was successful
 #if HAS_VOLTAGE_MONITOR

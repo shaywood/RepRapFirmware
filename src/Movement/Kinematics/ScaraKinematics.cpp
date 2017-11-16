@@ -124,8 +124,8 @@ bool ScaraKinematics::CartesianToMotorSteps(const float machinePos[], const floa
 //debugPrintf("psi = %.2f, theta = %.2f\n", psi * RadiansToDegrees, theta * RadiansToDegrees);
 
 	motorPos[X_AXIS] = lrintf(theta * RadiansToDegrees * stepsPerMm[X_AXIS]);
-	motorPos[Y_AXIS] = lrintf((psi * RadiansToDegrees * stepsPerMm[Y_AXIS]) - (crosstalk[0] * motorPos[X_AXIS]));
-	motorPos[Z_AXIS] = lrintf((machinePos[Z_AXIS] * stepsPerMm[Z_AXIS]) - (motorPos[X_AXIS] * crosstalk[1]) - (motorPos[Y_AXIS] * crosstalk[2]));
+	motorPos[Y_AXIS] = lrintf((psi - (crosstalk[0] * theta)) * RadiansToDegrees * stepsPerMm[Y_AXIS]);
+	motorPos[Z_AXIS] = lrintf((machinePos[Z_AXIS] - (crosstalk[1] * theta) - (crosstalk[2] * psi)) * stepsPerMm[Z_AXIS]);
 
 	// Transform any additional axes linearly
 	for (size_t axis = XYZ_AXES; axis < numVisibleAxes; ++axis)
@@ -139,14 +139,14 @@ bool ScaraKinematics::CartesianToMotorSteps(const float machinePos[], const floa
 // For Scara, the X and Y components of stepsPerMm are actually steps per degree angle.
 void ScaraKinematics::MotorStepsToCartesian(const int32_t motorPos[], const float stepsPerMm[], size_t numVisibleAxes, size_t numTotalAxes, float machinePos[]) const
 {
-	const float psi = ((float)motorPos[X_AXIS]/stepsPerMm[X_AXIS]) * DegreesToRadians;
-    const float theta = (((float)motorPos[Y_AXIS] + ((float)motorPos[X_AXIS] * crosstalk[0]))/stepsPerMm[Y_AXIS]) * DegreesToRadians;
+	const float theta = ((float)motorPos[X_AXIS]/stepsPerMm[X_AXIS]) * DegreesToRadians;
+    const float psi = (((float)motorPos[Y_AXIS]/stepsPerMm[Y_AXIS]) * DegreesToRadians) + (crosstalk[0] * theta);
 
-    machinePos[X_AXIS] = (cosf(psi) * proximalArmLength + cosf(psi + theta) * distalArmLength) - xOffset;
-    machinePos[Y_AXIS] = (sinf(psi) * proximalArmLength + sinf(psi + theta) * distalArmLength) - yOffset;
+    machinePos[X_AXIS] = (cosf(theta) * proximalArmLength + cosf(psi + theta) * distalArmLength) - xOffset;
+    machinePos[Y_AXIS] = (sinf(theta) * proximalArmLength + sinf(psi + theta) * distalArmLength) - yOffset;
 
     // On some machines (e.g. Helios), the X and/or Y arm motors also affect the Z height
-    machinePos[Z_AXIS] = ((float)motorPos[Z_AXIS] + ((float)motorPos[X_AXIS] * crosstalk[1]) + ((float)motorPos[Y_AXIS] * crosstalk[2]))/stepsPerMm[Z_AXIS];
+    machinePos[Z_AXIS] = ((float)motorPos[Z_AXIS]/stepsPerMm[Z_AXIS]) + (crosstalk[1] * theta) + (crosstalk[2] * psi);
 
 	// Convert any additional axes linearly
 	for (size_t drive = XYZ_AXES; drive < numVisibleAxes; ++drive)
@@ -370,22 +370,48 @@ const char* ScaraKinematics::GetHomingFileName(AxesBitmap toBeHomed, AxesBitmap 
 // Return true if the entire homing move should be terminated, false if only the motor associated with the endstop switch should be stopped.
 bool ScaraKinematics::QueryTerminateHomingMove(size_t axis) const
 {
-	return false;
+	// If crosstalk causes the axis motor concerned to affect other axes then must terminate the entire move
+	return (axis == X_AXIS && (crosstalk[0] != 0.0 || crosstalk[1] != 0.0))
+		|| (axis == Y_AXIS && crosstalk[2] != 0.0);
 }
 
 // This function is called from the step ISR when an endstop switch is triggered during homing after stopping just one motor or all motors.
 // Take the action needed to define the current position, normally by calling dda.SetDriveCoordinate() and return false.
-//TODO this doesn't appear to take account of the crosstalk factors yet
 void ScaraKinematics::OnHomingSwitchTriggered(size_t axis, bool highEnd, const float stepsPerMm[], DDA& dda) const
 {
-	const float hitPoint = (axis == 0)
-							? ((highEnd) ? thetaLimits[1] : thetaLimits[0])						// proximal joint homing switch
-							  : (axis == 1)
-								? ((highEnd) ? psiLimits[1] : psiLimits[0])	// distal joint homing switch
-								  : (highEnd)
-									? reprap.GetPlatform().AxisMaximum(axis)					// other axis (e.g. Z) high end homing switch
-									  : reprap.GetPlatform().AxisMinimum(axis);					// other axis (e.g. Z) low end homing switch
-	dda.SetDriveCoordinate(lrintf(hitPoint * stepsPerMm[axis]), axis);
+	switch (axis)
+	{
+	case X_AXIS:	// proximal joint homing switch
+		{
+			const float hitPoint = (highEnd) ? thetaLimits[1] : thetaLimits[0];
+			dda.SetDriveCoordinate(lrintf(hitPoint * stepsPerMm[axis]), axis);
+		}
+		break;
+
+	case Y_AXIS:	// distal joint homing switch
+		{
+			const float hitPoint = ((highEnd) ? psiLimits[1] : psiLimits[0])
+									- ((dda.DriveCoordinates()[X_AXIS] * crosstalk[0])/stepsPerMm[X_AXIS]);
+			dda.SetDriveCoordinate(lrintf(hitPoint * stepsPerMm[axis]), axis);
+		}
+		break;
+
+	case Z_AXIS:	// Z axis homing switch
+		{
+			const float hitPoint = ((highEnd) ? reprap.GetPlatform().AxisMaximum(axis) : reprap.GetPlatform().AxisMinimum(axis))
+									- ((dda.DriveCoordinates()[X_AXIS] * crosstalk[1])/stepsPerMm[X_AXIS])
+									- ((dda.DriveCoordinates()[Y_AXIS] * crosstalk[2])/stepsPerMm[Y_AXIS]);
+			dda.SetDriveCoordinate(lrintf(hitPoint * stepsPerMm[axis]), axis);
+		}
+		break;
+
+	default:		// Additional axis
+		{
+			const float hitPoint = (highEnd) ? reprap.GetPlatform().AxisMaximum(axis) : reprap.GetPlatform().AxisMinimum(axis);
+			dda.SetDriveCoordinate(lrintf(hitPoint * stepsPerMm[axis]), axis);
+		}
+		break;
+	}
 }
 
 // Limit the speed and acceleration of a move to values that the mechanics can handle.
@@ -411,7 +437,9 @@ void ScaraKinematics::Recalc()
 	distalArmLengthSquared = fsquare(distalArmLength);
 	twoPd = proximalArmLength * distalArmLength * 2.0f;
 
-	minRadius = (proximalArmLength + distalArmLength * min<float>(cosf(psiLimits[0] * DegreesToRadians), cosf(psiLimits[1] * DegreesToRadians))) * 1.005;
+	minRadius = sqrtf(proximalArmLengthSquared + distalArmLengthSquared
+						- twoPd * max<float>(cosf(psiLimits[0] * DegreesToRadians), cosf(psiLimits[1] * DegreesToRadians))) * 1.005;
+
 	if (psiLimits[0] < 0.0 && psiLimits[1] > 0.0)
 	{
 		// Zero distal arm angle is reachable

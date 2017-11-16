@@ -30,6 +30,7 @@ Licence: GPL
 #include "MessageType.h"
 
 class TemperatureSensor;
+class HeaterProtection;
 class GCodeBuffer;
 
 class Heat
@@ -63,8 +64,8 @@ public:
 	float GetActiveTemperature(int8_t heater) const;
 	void SetStandbyTemperature(int8_t heater, float t);
 	float GetStandbyTemperature(int8_t heater) const;
-	void SetTemperatureLimit(int8_t heater, float t);
-	float GetTemperatureLimit(int8_t heater) const;
+	float GetHighestTemperatureLimit(int8_t heater) const;
+	float GetLowestTemperatureLimit(int8_t heater) const;
 	void Activate(int8_t heater);								// Turn on a heater
 	void Standby(int8_t heater, const Tool* tool);				// Set a heater to standby
 	float GetTemperature(int8_t heater) const;					// Get the temperature of a heater
@@ -105,10 +106,10 @@ public:
 	void SetHeaterSignalInverted(size_t heater, bool IsInverted)	// Set PWM signal inversion
 	pre(heater < Heaters);
 
-	void GetHeaterProtection(size_t heater, float& maxTempExcursion, float& maxFaultTime) const
+	void GetFaultDetectionParameters(size_t heater, float& maxTempExcursion, float& maxFaultTime) const
 	pre(heater < Heaters);
 
-	void SetHeaterProtection(size_t heater, float maxTempExcursion, float maxFaultTime)
+	void SetFaultDetectionParameters(size_t heater, float maxTempExcursion, float maxFaultTime)
 	pre(heater < Heaters);
 
 	bool IsHeaterEnabled(size_t heater) const					// Is this heater enabled?
@@ -126,6 +127,12 @@ public:
 	bool ConfigureHeaterSensor(size_t heater, unsigned int mcode, GCodeBuffer& gb, StringRef& reply, bool& error);	// Configure the temperature sensor for a channel
 	const char *GetHeaterName(size_t heater) const;				// Get the name of a heater, or nullptr if it hasn't been named
 
+	HeaterProtection& AccessHeaterProtection(size_t index) const;	// Return the protection parameters of the given index
+	void UpdateHeaterProtection();								// Updates the PIDs and HeaterProtection items when a heater is remapped
+
+	bool CheckHeater(size_t heater)								// Check if the heater is able to operate
+	pre(heater < Heaters);
+
 	float GetTemperature(size_t heater, TemperatureError& err); // Result is in degrees Celsius
 
 	const Tool* GetLastStandbyTool(int heater) const
@@ -142,10 +149,13 @@ public:
 
 private:
 	Heat(const Heat&);											// Private copy constructor to prevent copying
+
 	TemperatureSensor **GetSensor(size_t heater);				// Get a pointer to the temperature sensor entry
 	TemperatureSensor * const *GetSensor(size_t heater) const;	// Get a pointer to the temperature sensor entry
 
 	Platform& platform;											// The instance of the RepRap hardware class
+
+	HeaterProtection *heaterProtections[Heaters + NumExtraHeaterProtections];	// Heater protection instances to guarantee legal heater temperature ranges
 
 	PID* pids[Heaters];											// A PID controller for each heater
 	const Tool* lastStandbyTools[Heaters];						// The last tool that caused the corresponding heater to be set to standby
@@ -214,14 +224,14 @@ inline bool Heat::IsHeaterEnabled(size_t heater) const
 	return pids[heater]->IsHeaterEnabled();
 }
 
-inline void Heat::GetHeaterProtection(size_t heater, float& maxTempExcursion, float& maxFaultTime) const
+inline void Heat::GetFaultDetectionParameters(size_t heater, float& maxTempExcursion, float& maxFaultTime) const
 {
-	pids[heater]->GetHeaterProtection(maxTempExcursion, maxFaultTime);
+	pids[heater]->GetFaultDetectionParameters(maxTempExcursion, maxFaultTime);
 }
 
-inline void Heat::SetHeaterProtection(size_t heater, float maxTempExcursion, float maxFaultTime)
+inline void Heat::SetFaultDetectionParameters(size_t heater, float maxTempExcursion, float maxFaultTime)
 {
-	pids[heater]->SetHeaterProtection(maxTempExcursion, maxFaultTime);
+	pids[heater]->SetFaultDetectionParameters(maxTempExcursion, maxFaultTime);
 }
 
 #endif

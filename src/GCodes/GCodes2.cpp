@@ -1425,32 +1425,8 @@ bool GCodes::HandleMcode(GCodeBuffer& gb, StringRef& reply)
 		}
 		break;
 
-	case 143: // Set temperature limit
-		{
-			const int heater = (gb.Seen('H')) ? gb.GetIValue() : 1;		// default to extruder 1 if no heater number provided
-			if (heater < 0 || heater >= (int)Heaters)
-			{
-				reply.printf("Invalid heater number '%d'", heater);
-				result = GCodeResult::error;
-			}
-			else if (gb.Seen('S'))
-			{
-				const float limit = gb.GetFValue();
-				if (limit > BAD_LOW_TEMPERATURE && limit < BAD_ERROR_TEMPERATURE)
-				{
-					reprap.GetHeat().SetTemperatureLimit(heater, limit);
-				}
-				else
-				{
-					reply.copy("Invalid temperature limit");
-					result = GCodeResult::error;
-				}
-			}
-			else
-			{
-				reply.printf("Temperature limit for heater %d is %.1f" DEGREE_SYMBOL "C", heater, (double)reprap.GetHeat().GetTemperatureLimit(heater));
-			}
-		}
+	case 143: // Configure heater protection
+		result = GetGCodeResultFromError(SetHeaterProtection(gb, reply));
 		break;
 
 	case 144: // Set bed to standby
@@ -1969,9 +1945,9 @@ bool GCodes::HandleMcode(GCodeBuffer& gb, StringRef& reply)
 			{
 				reply.copy("Bad heater number in M303 command");
 			}
-			else if (temperature >= reprap.GetHeat().GetTemperatureLimit(heater))
+			else if (reprap.GetHeat().CheckHeater(heater))
 			{
-				reply.copy("Target temperature must be below temperature limit for this heater");
+				reply.copy("Heater is not ready to perform PID auto-tuning");
 			}
 			else if (maxPwm < 0.1 || maxPwm > 1.0)
 			{
@@ -2844,12 +2820,12 @@ bool GCodes::HandleMcode(GCodeBuffer& gb, StringRef& reply)
 			if (heater >= 0 && heater < (int)Heaters)
 			{
 				float maxTempExcursion, maxFaultTime;
-				reprap.GetHeat().GetHeaterProtection(heater, maxTempExcursion, maxFaultTime);
+				reprap.GetHeat().GetFaultDetectionParameters(heater, maxTempExcursion, maxFaultTime);
 				gb.TryGetFValue('P', maxFaultTime, seen);
 				gb.TryGetFValue('T', maxTempExcursion, seen);
 				if (seen)
 				{
-					reprap.GetHeat().SetHeaterProtection(heater, maxTempExcursion, maxFaultTime);
+					reprap.GetHeat().SetFaultDetectionParameters(heater, maxTempExcursion, maxFaultTime);
 				}
 				else
 				{
@@ -3432,8 +3408,16 @@ bool GCodes::HandleMcode(GCodeBuffer& gb, StringRef& reply)
 				moveBuffer.canPauseBefore = true;
 
 				// Decide which way and how far to go
-				const float axisLength = platform.AxisMaximum(axis) - platform.AxisMinimum(axis) + 5.0;
-				moveBuffer.coords[axis] = (gb.Seen('S') && gb.GetIValue() == 1) ? axisLength * -1.0 : axisLength;
+				if (gb.Seen('R'))
+				{
+					// Use relative probing radius if the R parameter is present
+					moveBuffer.coords[axis] += gb.GetFValue();
+				}
+				else
+				{
+					// Move to axis minimum if S1 is passed or to the axis maximum otherwise
+					moveBuffer.coords[axis] = (gb.Seen('S') && gb.GetIValue() > 0) ? platform.AxisMinimum(axis) : platform.AxisMaximum(axis);
+				}
 
 				// Zero every extruder drive
 				for (size_t drive = numTotalAxes; drive < DRIVES; drive++)
@@ -3453,7 +3437,6 @@ bool GCodes::HandleMcode(GCodeBuffer& gb, StringRef& reply)
 				// Kick off new movement
 				segmentsLeft = 1;
 				gb.SetState(GCodeState::probingToolOffset);
-				break;
 			}
 		}
 		break;

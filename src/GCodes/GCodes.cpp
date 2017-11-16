@@ -28,6 +28,7 @@
 #include "GCodeBuffer.h"
 #include "GCodeQueue.h"
 #include "Heating/Heat.h"
+#include "Heating/HeaterProtection.h"
 #include "Platform.h"
 #include "Movement/Move.h"
 #include "Scanner.h"
@@ -3601,6 +3602,136 @@ void GCodes::HandleReply(GCodeBuffer& gb, bool error, OutputBuffer *reply)
 	{
 		platform.MessageF(type, "Emulation of %s is not yet supported.\n", emulationType);	// don't send this one to the web as well, it concerns only the USB interface
 	}
+}
+
+// Configure heater protection (M143). Returns true if an error occurred
+bool GCodes::SetHeaterProtection(GCodeBuffer& gb, StringRef& reply)
+{
+	const int index = (gb.Seen('P'))
+						? gb.GetIValue()
+						: (gb.Seen('H')) ? gb.GetIValue() : 1;		// default to extruder 1 if no heater number provided
+	if ((index < 0 || index >= (int)Heaters) && (index < (int)FirstExtraHeaterProtection || index >= (int)(FirstExtraHeaterProtection + NumExtraHeaterProtections)))
+	{
+		reply.printf("Invalid heater protection item '%d'", index);
+		return true;
+	}
+
+	HeaterProtection &item = reprap.GetHeat().AccessHeaterProtection(index);
+
+	// Set heater to control
+	bool seen = false;
+	if (gb.Seen('P') && gb.Seen('H'))
+	{
+		const int heater = gb.GetIValue();
+		if (heater > (int)Heaters)									// allow negative values to disable heater protection
+		{
+			reply.printf("Invalid heater number '%d'", heater);
+			return true;
+		}
+
+		seen = true;
+		item.SetHeater(heater);
+	}
+
+	// Set heater to supervise
+	if (gb.Seen('X'))
+	{
+		const int heater = gb.GetIValue();
+		if ((heater < 0 || heater > (int)Heaters) && (heater < (int)FirstVirtualHeater || heater >= (int)(FirstVirtualHeater + MaxVirtualHeaters)))
+		{
+			reply.printf("Invalid heater number '%d'", heater);
+			return true;
+		}
+
+		seen = true;
+		item.SetSupervisedHeater(heater);
+	}
+
+	// Set trigger action
+	if (gb.Seen('A'))
+	{
+		const int action = gb.GetIValue();
+		if (action < 0 || action > (int)MaxHeaterProtectionAction)
+		{
+			reply.printf("Invalid heater protection action '%d'", action);
+		}
+
+		seen = true;
+		item.SetAction(static_cast<HeaterProtectionAction>(action));
+	}
+
+	// Set trigger event
+	if (gb.Seen('T'))
+	{
+		const int trigger = gb.GetIValue();
+		if (trigger < 0 || trigger > (int)MaxHeaterProtectionTrigger)
+		{
+			reply.printf("Invalid heater protection trigger '%d'", trigger);
+		}
+
+		seen = true;
+		item.SetTrigger(static_cast<HeaterProtectionTrigger>(trigger));
+	}
+
+	// Set temperature limit
+	if (gb.Seen('S'))
+	{
+		const float limit = gb.GetFValue();
+		if (limit <= BAD_LOW_TEMPERATURE || limit >= BAD_ERROR_TEMPERATURE)
+		{
+			reply.copy("Invalid temperature limit");
+			return true;
+		}
+
+		seen = true;
+		item.SetTemperatureLimit(limit);
+	}
+
+	// Report current parameters
+	if (!seen)
+	{
+		if (item.GetHeater() < 0)
+		{
+			reply.printf("Temperature protection item %d is not configured", index);
+		}
+		else
+		{
+			const char *actionString, *triggerString;
+			switch (item.GetAction())
+			{
+			case HeaterProtectionAction::GenerateFault:
+				actionString = "generate a heater fault";
+				break;
+			case HeaterProtectionAction::PermanentSwitchOff:
+				actionString = "permanently switch off";
+				break;
+			case HeaterProtectionAction::TemporarySwitchOff:
+				actionString = "temporarily switch off";
+				break;
+			default:
+				actionString = "(undefined)";
+				break;
+			}
+
+			switch (item.GetTrigger())
+			{
+			case HeaterProtectionTrigger::TemperatureExceeded:
+				triggerString = "exceeds";
+				break;
+			case HeaterProtectionTrigger::TemperatureTooLow:
+				triggerString = "falls below";
+				break;
+			default:
+				triggerString = "(undefined)";
+				break;
+			}
+
+			reply.printf("Temperature protection item %d is configured for heater %d and supervises heater %d to %s if the temperature %s %.1f" DEGREE_SYMBOL "C",
+					index, item.GetHeater(), item.GetSupervisedHeater(), actionString, triggerString, item.GetTemperatureLimit());
+		}
+	}
+
+	return false;
 }
 
 // Set PID parameters (M301 or M304 command). 'heater' is the default heater number to use.

@@ -8,6 +8,7 @@
 #include "Pid.h"
 #include "GCodes/GCodes.h"
 #include "Heat.h"
+#include "HeaterProtection.h"
 #include "Platform.h"
 #include "RepRap.h"
 
@@ -42,12 +43,11 @@ inline void PID::SetHeater(float power) const
 	platform.SetHeater(heater, invertPwmSignal ? (1.0 - power) : power);
 }
 
-void PID::Init(float pGain, float pTc, float pTd, float tempLimit, bool usePid, bool inverted)
+void PID::Init(float pGain, float pTc, float pTd, bool usePid, bool inverted)
 {
-	temperatureLimit = tempLimit;
 	maxTempExcursion = DefaultMaxTempExcursion;
 	maxHeatingFaultTime = DefaultMaxHeatingFaultTime;
-	model.SetParameters(pGain, pTc, pTd, 1.0, tempLimit, usePid, inverted);
+	model.SetParameters(pGain, pTc, pTd, 1.0, GetHighestTemperatureLimit(), usePid, inverted);
 	Reset();
 
 	if (model.IsEnabled())
@@ -82,7 +82,7 @@ void PID::Reset()
 // Set the process model
 bool PID::SetModel(float gain, float tc, float td, float maxPwm, bool usePid, bool inverted)
 {
-	const float temperatureLimit = reprap.GetHeat().GetTemperatureLimit(heater);
+	const float temperatureLimit = GetHighestTemperatureLimit();
 	const bool rslt = model.SetParameters(gain, tc, td, maxPwm, temperatureLimit, usePid, inverted);
 	if (rslt)
 	{
@@ -112,15 +112,23 @@ bool PID::SetModel(float gain, float tc, float td, float maxPwm, bool usePid, bo
 	return rslt;
 }
 
+// Get the highest temperature limit
+float PID::GetHighestTemperatureLimit() const
+{
+	return reprap.GetHeat().GetHighestTemperatureLimit(heater);
+}
+
+// Get the lowest temperature limit
+float PID::GetLowestTemperatureLimit() const
+{
+	return reprap.GetHeat().GetLowestTemperatureLimit(heater);
+}
+
 // Read and store the temperature of this heater and returns the error code.
 TemperatureError PID::ReadTemperature()
 {
 	TemperatureError err = TemperatureError::success;				// assume no error
 	temperature = reprap.GetHeat().GetTemperature(heater, err);		// in the event of an error, err is set and BAD_ERROR_TEMPERATURE is returned
-	if (err == TemperatureError::success && temperature > temperatureLimit)
-	{
-		err = TemperatureError::tooHigh;
-	}
 	return err;
 }
 
@@ -377,6 +385,31 @@ void PID::Spin()
 				{
 					lastPwm = model.GetMaxPwm() - lastPwm;
 				}
+
+				// Verify that everything is operating in the required temperature range
+				for (HeaterProtection *prot = heaterProtection; prot != nullptr; prot = prot->Next())
+				{
+					if (!prot->Check())
+					{
+						lastPwm = 0.0;
+						switch (prot->GetAction())
+						{
+						case HeaterProtectionAction::GenerateFault:
+							mode = HeaterMode::fault;
+							reprap.GetGCodes().HandleHeaterFault(heater);
+							platform.MessageF(ErrorMessage, "Heating fault on heater %d\n", heater);
+							break;
+
+						case HeaterProtectionAction::TemporarySwitchOff:
+							// Do nothing, the PWM value has already been set above
+							break;
+
+						case HeaterProtectionAction::PermanentSwitchOff:
+							SwitchOff();
+							break;
+						}
+					}
+				}
 			}
 			else
 			{
@@ -403,9 +436,13 @@ void PID::Spin()
 
 void PID::SetActiveTemperature(float t)
 {
-	if (t > temperatureLimit)
+	if (t > GetHighestTemperatureLimit())
 	{
 		platform.MessageF(ErrorMessage, "Temperature %.1f" DEGREE_SYMBOL "C too high for heater %d\n", (double)t, heater);
+	}
+	else if (t < GetLowestTemperatureLimit())
+	{
+		platform.MessageF(ErrorMessage, "Temperature %.1f" DEGREE_SYMBOL "C too low for heater %d\n", (double)t, heater);
 	}
 	else
 	{
@@ -419,9 +456,13 @@ void PID::SetActiveTemperature(float t)
 
 void PID::SetStandbyTemperature(float t)
 {
-	if (t > temperatureLimit)
+	if (t > GetHighestTemperatureLimit())
 	{
 		platform.MessageF(ErrorMessage, "Temperature %.1f" DEGREE_SYMBOL "C too high for heater %d\n", (double)t, heater);
+	}
+	else if (t < GetLowestTemperatureLimit())
+	{
+		platform.MessageF(ErrorMessage, "Temperature %.1f" DEGREE_SYMBOL "C too low for heater %d\n", (double)t, heater);
 	}
 	else
 	{
@@ -431,6 +472,11 @@ void PID::SetStandbyTemperature(float t)
 			SwitchOn();
 		}
 	}
+}
+
+void PID::SetHeaterProtection(HeaterProtection *h)
+{
+	heaterProtection = h;
 }
 
 void PID::Activate()
@@ -449,6 +495,20 @@ void PID::Standby()
 		active = false;
 		SwitchOn();
 	}
+}
+
+// Check heater protection elements and return true if everything is good
+bool PID::CheckProtection() const
+{
+	for (HeaterProtection *prot = heaterProtection; prot != nullptr; prot = prot->Next())
+	{
+		if (!prot->Check())
+		{
+			// Something is not right
+			return false;
+		}
+	}
+	return true;
 }
 
 void PID::ResetFault()

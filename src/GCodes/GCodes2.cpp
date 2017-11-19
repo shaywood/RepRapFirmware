@@ -2080,6 +2080,7 @@ bool GCodes::HandleMcode(GCodeBuffer& gb, StringRef& reply)
 				gb.TryGetIValue('B', dontUsePid, seen);
 				gb.TryGetFValue('S', maxPwm, seen);
 				gb.TryGetFValue('V', voltage, seen);
+				gb.TryGetIValue('I', inversionParameter, seen);
 
 				if (seen)
 				{

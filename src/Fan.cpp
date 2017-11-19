@@ -220,7 +220,7 @@ void Fan::Refresh()
 		{
 			// Check if this heater is both monitored by this fan and in use
 			if (   IsBitSet(heatersMonitored, h)
-				&& (h < reprap.GetToolHeatersInUse() || (h >= Heaters && h < Heaters + MaxVirtualHeaters) || (int)h == reprap.GetHeat().GetBedHeater() || (int)h == reprap.GetHeat().GetChamberHeater())
+				&& (h < reprap.GetToolHeatersInUse() || (h >= Heaters && h < Heaters + MaxVirtualHeaters) || reprap.GetHeat().IsBedHeater(h) || reprap.GetHeat().IsChamberHeater(h))
 			   )
 			{
 				// This heater is both monitored and potentially active

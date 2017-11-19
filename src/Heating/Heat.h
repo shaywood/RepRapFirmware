@@ -48,17 +48,17 @@ public:
 	bool ColdExtrude() const;									// Is cold extrusion allowed?
 	void AllowColdExtrude(bool b);								// Allow or deny cold extrusion
 
-	int8_t GetBedHeater() const									// Get hot bed heater number
-	post(-1 <= result; result < Heaters);
+	int8_t GetBedHeater(size_t index) const						// Get a hot bed heater number
+	pre(index < NumBedHeaters);
+	void SetBedHeater(size_t index, int8_t heater)				// Set a hot bed heater number
+	pre(index < NumBedHeaters; -1 <= heater; heater < Heaters);
+	bool IsBedHeater(int8_t heater) const;						// Check if this heater is a bed heater
 
-	void SetBedHeater(int8_t heater)							// Set hot bed heater number
-	pre(-1 <= heater; heater < Heaters);
-
-	int8_t GetChamberHeater() const								// Get chamber heater number
-	post(-1 <= result; result < Heaters);
-
-	void SetChamberHeater(int8_t heater)						// Set chamber heater number
-	pre(-1 <= heater; heater < Heaters);
+	int8_t GetChamberHeater(size_t index) const					// Get a chamber heater number
+	pre(index < NumChamberHeaters);
+	void SetChamberHeater(size_t index, int8_t heater)			// Set a chamber heater number
+	pre(index < NumChamberHeaters; -1 <= heater; heater < Heaters);
+	bool IsChamberHeater(int8_t heater) const;					// Check if this heater is a chamber heater
 
 	void SetActiveTemperature(int8_t heater, float t);
 	float GetActiveTemperature(int8_t heater) const;
@@ -168,8 +168,8 @@ private:
 
 	bool active;												// Are we active?
 	bool coldExtrude;											// Is cold extrusion allowed?
-	int8_t bedHeater;											// Index of the hot bed heater to use or -1 if none is available
-	int8_t chamberHeater;										// Index of the chamber heater to use or -1 if none is available
+	int8_t bedHeaters[NumBedHeaters];							// Indices of the hot bed heaters to use or -1 if none is available
+	int8_t chamberHeaters[NumChamberHeaters];					// Indices of the chamber heaters to use or -1 if none is available
 	int8_t heaterBeingTuned;									// which PID is currently being tuned
 	int8_t lastHeaterTuned;										// which PID we last finished tuning
 };
@@ -186,14 +186,14 @@ inline void Heat::AllowColdExtrude(bool b)
 	coldExtrude = b;
 }
 
-inline int8_t Heat::GetBedHeater() const
+inline int8_t Heat::GetBedHeater(size_t index) const
 {
-	return bedHeater;
+	return bedHeaters[index];
 }
 
-inline int8_t Heat::GetChamberHeater() const
+inline int8_t Heat::GetChamberHeater(size_t index) const
 {
-	return chamberHeater;
+	return chamberHeaters[index];
 }
 
 // Get the process model for the specified heater

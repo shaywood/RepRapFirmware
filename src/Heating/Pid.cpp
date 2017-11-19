@@ -695,7 +695,7 @@ void PID::DoTuningStep()
 	case HeaterMode::tuning1:
 		// Heating up
 		{
-			const bool isBedOrChamberHeater = (heater == reprap.GetHeat().GetBedHeater() || heater == reprap.GetHeat().GetChamberHeater());
+			const bool isBedOrChamberHeater = (reprap.GetHeat().IsBedHeater(heater) || reprap.GetHeat().IsChamberHeater(heater));
 			const uint32_t heatingTime = millis() - tuningPhaseStartTime;
 			const float extraTimeAllowed = (isBedOrChamberHeater) ? 60.0 : 30.0;
 			if (heatingTime > (uint32_t)((model.GetDeadTime() + extraTimeAllowed) * SecondsToMillis) && (temperature - tuningStartTemp) < 3.0)

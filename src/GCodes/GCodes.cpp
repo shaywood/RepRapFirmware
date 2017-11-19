@@ -4409,13 +4409,13 @@ void GCodes::GenerateTemperatureReport(StringRef& reply) const
 		}
 	}
 
-	const int bedHeater = heat.GetBedHeater();
+	const int bedHeater = (NumBedHeaters > 0) ? heat.GetBedHeater(0) : -1;				// default to first heated bed
 	if (bedHeater >= 0)
 	{
 		reply.catf(" B:%.1f /%.1f", (double)heat.GetTemperature(bedHeater), (double)heat.GetTargetTemperature(bedHeater));
 	}
 
-	const int chamberHeater = heat.GetChamberHeater();
+	const int chamberHeater = (NumChamberHeaters > 0) ? heat.GetChamberHeater(0) : -1;	// default to first chamber heater
 	if (chamberHeater >= 0)
 	{
 		reply.catf(" C:%.1f /%.1f", (double)heat.GetTemperature(chamberHeater), (double)heat.GetTargetTemperature(chamberHeater));

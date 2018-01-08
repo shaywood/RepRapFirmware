@@ -1,21 +1,11 @@
 /****************************************************************************************************
 
-RepRapFirmware - Platform: RepRapPro Ormerod with Duet controller
+RepRapFirmware - Platform
 
 Platform contains all the code and definitions to deal with machine-dependent things such as control
 pins, bed area, number of extruders, tolerable accelerations and speeds and so on.
 
-No definitions that are system-independent should go in here.  Put them in Configuration.h.  Note that
-the lengths of arrays such as DRIVES (see below) are defined here, so any array initialiser that depends on those
-lengths, for example:
-
-#define DRIVES 4
-.
-.
-.
-#define DRIVE_RELATIVE_MODES {false, false, false, true}
-
-also needs to go here.
+No definitions that are system-independent should go in here.  Put them in Configuration.h.
 
 -----------------------------------------------------------------------------------------------------
 
@@ -60,16 +50,27 @@ Licence: GPL
 # include "Microstepping.h"
 #endif
 
-const bool FORWARDS = true;
-const bool BACKWARDS = !FORWARDS;
+constexpr bool FORWARDS = true;
+constexpr bool BACKWARDS = !FORWARDS;
+
+// Define the number of ADC filters and the indices of the extra ones
+#if HAS_VREF_MONITOR
+constexpr size_t VrefFilterIndex = Heaters;
+constexpr size_t VssaFilterIndex = Heaters + 1;
+# if HAS_CPU_TEMP_SENSOR
+constexpr size_t NumAdcFilters = Heaters + 3;
+constexpr size_t CpuTempFilterIndex = Heaters + 2;
+# else
+constexpr size_t NumAdcFilters = Heaters + 2;
+# endif
+#elif HAS_CPU_TEMP_SENSOR
+constexpr size_t NumAdcFilters = Heaters + 1;
+constexpr size_t CpuTempFilterIndex = Heaters;
+#else
+constexpr size_t NumAdcFilters = Heaters;
+#endif
 
 /**************************************************************************************************/
-
-// Some constants
-#define TIME_TO_REPRAP 1.0e6 		// Convert seconds to the units used by the machine (usually microseconds)
-#define TIME_FROM_REPRAP 1.0e-6 	// Convert the units used by the machine (usually microseconds) to seconds
-
-#define DEGREE_SYMBOL	"\xC2\xB0"	// Unicode degree-symbol as UTF8
 
 #if SUPPORT_INKJET
 
@@ -93,34 +94,31 @@ const float AXIS_MAXIMA[MaxAxes] = AXES_(230.0, 210.0, 200.0, 0.0, 0.0, 0.0, 0.0
 
 // Z PROBE
 
-const float Z_PROBE_STOP_HEIGHT = 0.7;							// Millimetres
-const unsigned int Z_PROBE_AVERAGE_READINGS = 8;				// We average this number of readings with IR on, and the same number with IR off
-const int Z_PROBE_AD_VALUE = 500;								// Default for the Z probe - should be overwritten by experiment
+constexpr float Z_PROBE_STOP_HEIGHT = 0.7;						// Millimetres
+constexpr unsigned int Z_PROBE_AVERAGE_READINGS = 8;			// We average this number of readings with IR on, and the same number with IR off
+constexpr int Z_PROBE_AD_VALUE = 500;							// Default for the Z probe - should be overwritten by experiment
 
 // HEATERS - The bed is assumed to be the at index 0
 
 // Define the number of temperature readings we average for each thermistor. This should be a power of 2 and at least 4 ^ AD_OVERSAMPLE_BITS.
 // Keep THERMISTOR_AVERAGE_READINGS * NUM_HEATERS * 2ms no greater than HEAT_SAMPLE_TIME or the PIDs won't work well.
-const unsigned int ThermistorAverageReadings = 32;
+constexpr unsigned int ThermistorAverageReadings = 32;
 
-const uint32_t maxPidSpinDelay = 5000;			// Maximum elapsed time in milliseconds between successive temp samples by Pid::Spin() permitted for a temp sensor
-
-/****************************************************************************************************/
-
-// File handling
-
-const size_t MAX_FILES = 10;					// Must be large enough to handle the max number of simultaneous web requests + files being printed
-const size_t FILE_BUFFER_SIZE = 256;
+constexpr uint32_t maxPidSpinDelay = 5000;			// Maximum elapsed time in milliseconds between successive temp samples by Pid::Spin() permitted for a temp sensor
 
 /****************************************************************************************************/
 
 enum class BoardType : uint8_t
 {
 	Auto = 0,
-#if defined(DUET_NG) && defined(DUET_WIFI)
+#if defined(__SAME70Q21__)
+	SAME70_TEST = 1
+#elif defined(DUET_NG) && defined(DUET_WIFI)
 	DuetWiFi_10 = 1
 #elif defined(DUET_NG) && defined(DUET_ETHERNET)
 	DuetEthernet_10 = 1
+#elif defined(DUET_M)
+	DuetM_10 = 1,
 #elif defined(DUET_06_085)
 	Duet_06 = 1,
 	Duet_07 = 2,
@@ -170,27 +168,31 @@ enum class SoftwareResetReason : uint16_t
 	NMI = 0x20,
 	hardFault = 0x30,				// most exceptions get escalated to a hard fault
 	stuckInSpin = 0x40,				// we got stuck in a Spin() function for too long
+	wdtFault = 0x50,				// secondary watchdog
 	otherFault = 0x70,
 	inAuxOutput = 0x0800,			// this bit is or'ed in if we were in aux output at the time
 	inLwipSpin = 0x2000,			// we got stuck in a call to LWIP for too long
-	inUsbOutput = 0x4000			// this bit is or'ed in if we were in USB output at the time
+	inUsbOutput = 0x4000,			// this bit is or'ed in if we were in USB output at the time
+	deliberate = 0x8000				// this but it or'ed in if we deliberately caused a fault
 };
 
 // Enumeration to describe various tests we do in response to the M122 command
 enum class DiagnosticTestType : int
 {
+	PrintTestReport = 1,			// run some tests and report the processor ID
+
+	PrintMoves = 100,				// print summary of recent moves (only if recording moves was enabled in firmware)
+#ifdef DUET_NG
+	PrintExpanderStatus = 101,		// print DueXn expander status
+#endif
+	TimeSquareRoot = 102,			// do a timing test on the square root function
+
 	TestWatchdog = 1001,			// test that we get a watchdog reset if the tick interrupt stops
 	TestSpinLockup = 1002,			// test that we get a software reset if a Spin() function takes too long
 	TestSerialBlock = 1003,			// test what happens when we write a blocking message via debugPrintf()
 	DivideByZero = 1004,			// do an integer divide by zero to test exception handling
 	UnalignedMemoryAccess = 1005,	// do an unaligned memory access to test exception handling
-	BusFault = 1006,				// generate a bus fault
-
-	PrintMoves = 100,				// print summary of recent moves
-#ifdef DUET_NG
-	PrintExpanderStatus = 101,		// print DueXn expander status
-#endif
-	TimeSquareRoot = 102			// do a timing test on the square root function
+	BusFault = 1006					// generate a bus fault
 };
 
 /***************************************************************************************************************/
@@ -313,13 +315,14 @@ public:
 	Compatibility Emulating() const;
 	void SetEmulating(Compatibility c);
 	void Diagnostics(MessageType mtype);
-	void DiagnosticTest(int d);
+	bool DiagnosticTest(GCodeBuffer& gb, StringRef& reply, int d);
 	void ClassReport(uint32_t &lastTime);  			// Called on Spin() return to check everything's live.
 	void LogError(ErrorCode e) { errorCodeBits |= (uint32_t)e; }
 
 	void SoftwareReset(uint16_t reason, const uint32_t *stk = nullptr);
 	bool AtxPower() const;
-	void SetAtxPower(bool on);
+	void AtxPowerOn();
+	void AtxPowerOff(bool defer);
 	void SetBoardType(BoardType bt);
 	const char* GetElectronicsString() const;
 	const char* GetBoardString() const;
@@ -369,15 +372,14 @@ public:
 	friend class FileStore;
 
 	MassStorage* GetMassStorage() const;
-	FileStore* GetFileStore(const char* directory, const char* fileName, OpenMode mode);
+	FileStore* OpenFile(const char* directory, const char* fileName, OpenMode mode) { return massStorage->OpenFile(directory, fileName, mode); }
+
 	const char* GetWebDir() const; 					// Where the html etc files are
 	const char* GetGCodeDir() const; 				// Where the gcodes are
 	const char* GetSysDir() const;  				// Where the system files are
 	const char* GetMacroDir() const;				// Where the user-defined macros are
 	const char* GetConfigFile() const; 				// Where the configuration is stored (in the system dir).
 	const char* GetDefaultFile() const;				// Where the default configuration is stored (in the system dir).
-	void InvalidateFiles(const FATFS *fs);			// Called to invalidate files when the SD card is removed
-	bool AnyFileOpen(const FATFS *fs) const;		// Returns true if any files are open on the SD card
 
 	// Message output (see MessageType for further details)
 
@@ -385,6 +387,7 @@ public:
 	void Message(MessageType type, OutputBuffer *buffer);
 	void MessageF(MessageType type, const char *fmt, ...) __attribute__ ((format (printf, 3, 4)));
 	void MessageF(MessageType type, const char *fmt, va_list vargs);
+	bool FlushAuxMessages();
 	bool FlushMessages();							// Flush messages to USB and aux, returning true if there is more to send
 	void SendAlert(MessageType mt, const char *message, const char *title, int sParam, float tParam, AxesBitmap controls);
 	void StopLogging();
@@ -408,7 +411,7 @@ public:
 	void SetIdleCurrentFactor(float f);
 	float GetIdleCurrentFactor() const
 		{ return idleCurrentFactor; }
-	bool SetDriverMicrostepping(size_t driver, int microsteps, int mode);
+	bool SetDriverMicrostepping(size_t driver, unsigned int microsteps, int mode);
 	unsigned int GetDriverMicrostepping(size_t drive, int mode, bool& interpolation) const;
 	bool SetMicrostepping(size_t drive, int microsteps, int mode);
 	unsigned int GetMicrostepping(size_t drive, int mode, bool& interpolation) const;
@@ -464,6 +467,11 @@ public:
 	uint32_t GetSlowDrivers() const { return slowDrivers; }
 	uint32_t GetSlowDriverClocks() const { return slowDriverStepPulseClocks; }
 
+#if NONLINEAR_EXTRUSION
+	bool GetExtrusionCoefficients(size_t extruder, float& a, float& b, float& limit) const;
+	void SetNonlinearExtrusion(size_t extruder, float a, float b, float limit);
+#endif
+
 	// Z probe
 
 	void SetZProbeDefaults();
@@ -480,7 +488,7 @@ public:
 	const ZProbeParameters& GetCurrentZProbeParameters() const { return GetZProbeParameters(zProbeType); }
 	void SetZProbeParameters(int32_t probeType, const struct ZProbeParameters& params);
 	bool HomingZWithProbe() const;
-	bool WritePlatformParameters(FileStore *f) const;
+	bool WritePlatformParameters(FileStore *f, bool includingG31) const;
 	void SetProbing(bool isProbing);
 	bool ProgramZProbe(GCodeBuffer& gb, StringRef& reply);
 	void SetZProbeModState(bool b) const;
@@ -488,13 +496,13 @@ public:
 	// Heat and temperature
 	float GetZProbeTemperature();							// Get our best estimate of the Z probe temperature
 
-	volatile ThermistorAveragingFilter& GetThermistorFilter(size_t channel)
-	pre(channel < ARRAY_SIZE(thermistorFilters))
+	volatile ThermistorAveragingFilter& GetAdcFilter(size_t channel)
+	pre(channel < ARRAY_SIZE(adcFilters))
 	{
-		return thermistorFilters[channel];
+		return adcFilters[channel];
 	}
 
-	void SetHeater(size_t heater, float power)				// power is a fraction in [0,1]
+	void SetHeater(size_t heater, float power, PwmFrequency freq = 0)	// power is a fraction in [0,1]
 	pre(heater < Heaters);
 
 	uint32_t HeatSampleInterval() const;
@@ -553,6 +561,9 @@ public:
 #if HAS_SMART_DRIVERS
 	float GetTmcDriversTemperature(unsigned int board) const;
 	void DriverCoolingFansOn(uint32_t driverChannelsMonitored);
+#endif
+
+#if HAS_STALL_DETECT
 	bool ConfigureStallDetection(GCodeBuffer& gb, StringRef& reply);
 #endif
 
@@ -603,7 +614,13 @@ private:
 
 #if HAS_SMART_DRIVERS
 	void ReportDrivers(DriversBitmap whichDrivers, const char* text, bool& reported);
+#endif
+#if HAS_STALL_DETECT
 	bool AnyMotorStalled(size_t drive) const pre(drive < DRIVES);
+#endif
+
+#if SAM4E || SAM4S || SAME70
+	void PrintUniqueId(MessageType mtype);
 #endif
 
 	// These are the structures used to hold our non-volatile data.
@@ -618,12 +635,12 @@ private:
 	// directly from/to flash memory.
 	struct SoftwareResetData
 	{
-		static const uint16_t versionValue = 7;		// increment this whenever this struct changes
+		static const uint16_t versionValue = 8;		// increment this whenever this struct changes
 		static const uint16_t magicValue = 0x7D00 | versionValue;	// value we use to recognise that all the flash data has been written
 #if SAM3XA
 		static const uint32_t nvAddress = 0;		// must be 4-byte aligned
 #endif
-		static const size_t numberOfSlots = 5;		// number of storage slots used to implement wear levelling - must fit in 512 bytes
+		static const size_t numberOfSlots = 4;		// number of storage slots used to implement wear levelling - must fit in 512 bytes
 
 		uint16_t magic;								// the magic number, including the version
 		uint16_t resetReason;						// this records why we did a software reset, for diagnostic purposes
@@ -633,7 +650,8 @@ private:
 		uint32_t icsr;								// interrupt control and state register
 		uint32_t bfar;								// bus fault address register
 		uint32_t sp;								// stack pointer
-		uint32_t stack[18];							// stack when the exception occurred, with the program counter at the bottom
+		time_t when;								// value of the RTC when the software reset occurred
+		uint32_t stack[24];							// stack when the exception occurred, with the program counter at the bottom
 
 		bool isVacant() const						// return true if this struct can be written without erasing it first
 		{
@@ -650,8 +668,8 @@ private:
 		}
 	};
 
-#if SAM4E || SAM4S
-	static_assert(SoftwareResetData::numberOfSlots * sizeof(SoftwareResetData) <= 512, "Can't fit software reset data in SAM4 user signature area");
+#if SAM4E || SAM4S || SAME70
+	static_assert(SoftwareResetData::numberOfSlots * sizeof(SoftwareResetData) <= 512, "Can't fit software reset data in user signature area");
 #else
 	static_assert(SoftwareResetData::numberOfSlots * sizeof(SoftwareResetData) <= FLASH_DATA_LENGTH, "NVData too large");
 #endif
@@ -687,7 +705,6 @@ private:
 	void GetStackUsage(uint32_t* currentStack, uint32_t* maxStack, uint32_t* neverUsed) const;
 
 	// DRIVES
-
 	void SetDriverCurrent(size_t driver, float current, int code);
 	void UpdateMotorCurrent(size_t driver);
 	void SetDriverDirection(uint8_t driver, bool direction)
@@ -706,23 +723,24 @@ private:
 	float driveStepsPerUnit[DRIVES];
 	float instantDvs[DRIVES];
 	float pressureAdvance[MaxExtruders];
-	float motorCurrents[DRIVES];					// the normal motor current for each stepper driver
-	float motorCurrentFraction[DRIVES];				// the percentages of normal motor current that each driver is set to
+#if NONLINEAR_EXTRUSION
+	float nonlinearExtrusionA[MaxExtruders], nonlinearExtrusionB[MaxExtruders], nonlinearExtrusionLimit[MaxExtruders];
+#endif
+	float motorCurrents[DRIVES];						// the normal motor current for each stepper driver
+	float motorCurrentFraction[DRIVES];					// the percentages of normal motor current that each driver is set to
 #if HAS_SMART_DRIVERS
 	float motorStandstillCurrentFraction[DRIVES];
 #endif
-	AxisDriversConfig axisDrivers[MaxAxes];			// the driver numbers assigned to each axis
-	uint8_t extruderDrivers[MaxExtruders];			// the driver number assigned to each extruder
-	uint32_t driveDriverBits[2 * DRIVES];			// the bitmap of driver port bits for each axis or extruder, followed by the raw versions
-	uint32_t slowDriverStepPulseClocks;				// minimum high and low step pulse widths, in processor clocks
-	uint32_t slowDrivers;							// bitmap of driver port bits that need extended step pulse timing
+	AxisDriversConfig axisDrivers[MaxAxes];				// the driver numbers assigned to each axis
+	uint8_t extruderDrivers[MaxExtruders];				// the driver number assigned to each extruder
+	uint32_t driveDriverBits[2 * DRIVES];				// the bitmap of driver port bits for each axis or extruder, followed by the raw versions
+	uint32_t slowDriverStepPulseClocks;					// minimum high and low step pulse widths, in processor clocks
+	uint32_t slowDrivers;								// bitmap of driver port bits that need extended step pulse timing
 	float idleCurrentFactor;
 
 #if HAS_SMART_DRIVERS
-	size_t numSmartDrivers;						// the number of TMC2660 drivers we have, the remaining are simple enable/step/dir drivers
-	DriversBitmap logOnStallDrivers, pauseOnStallDrivers, rehomeOnStallDrivers;
-	DriversBitmap temperatureShutdownDrivers, temperatureWarningDrivers, shortToGroundDrivers, openLoadDrivers, stalledDrivers;
-	DriversBitmap stalledDriversToLog, stalledDriversToPause, stalledDriversToRehome;
+	size_t numSmartDrivers;								// the number of TMC2660 drivers we have, the remaining are simple enable/step/dir drivers
+	DriversBitmap temperatureShutdownDrivers, temperatureWarningDrivers, shortToGroundDrivers, openLoadDrivers;
 	uint8_t nextDriveToPoll;
 	bool driversPowered;
 	bool onBoardDriversFanRunning;						// true if a fan is running to cool the on-board drivers
@@ -731,11 +749,16 @@ private:
 	uint32_t offBoardDriversFanStartMillis;				// how many times we have suppressed a temperature warning
 #endif
 
+#if HAS_STALL_DETECT
+	DriversBitmap logOnStallDrivers, pauseOnStallDrivers, rehomeOnStallDrivers;
+	DriversBitmap stalledDrivers, stalledDriversToLog, stalledDriversToPause, stalledDriversToRehome;
+#endif
+
 #if defined(DUET_06_085)
 	// Digipots
 	MCP4461 mcpDuet;
 	MCP4461 mcpExpansion;
-	Pin potWipes[8];								// we have only 8 digipots, on the Duet 0.8.5 we use the DAC for the 9th
+	Pin potWipes[8];												// we have only 8 digipots, on the Duet 0.8.5 we use the DAC for the 9th
 	float senseResistor;
 	float maxStepperDigipotVoltage;
 	float stepperDacVoltageRange, stepperDacVoltageOffset;
@@ -746,7 +769,6 @@ private:
 #endif
 
 	// Z probe
-
 	Pin zProbePin;
 	Pin zProbeModulationPin;
 	ZProbeProgrammer zProbeProg;
@@ -754,11 +776,9 @@ private:
 	volatile ZProbeAveragingFilter zProbeOffFilter;					// Z probe readings we took with the IR turned off
 
 	// Thermistors and temperature monitoring
-	volatile ThermistorAveragingFilter thermistorFilters[Heaters];	// bed and extruder thermistor readings
+	volatile ThermistorAveragingFilter adcFilters[NumAdcFilters];	// ADC reading averaging filters
 
 #if HAS_CPU_TEMP_SENSOR
-	volatile ThermistorAveragingFilter cpuTemperatureFilter;		// MCU temperature readings
-	AnalogChannelNumber temperatureAdcChannel;
 	uint32_t highestMcuTemperature, lowestMcuTemperature;
 	float mcuTemperatureAdjust;
 #endif
@@ -768,7 +788,6 @@ private:
 	void UpdateNetworkAddress(byte dst[4], const byte src[4]);
 
 	// Axes and endstops
-
 	float axisMaxima[MaxAxes];
 	float axisMinima[MaxAxes];
 	AxesBitmap axisMinimaProbed, axisMaximaProbed;
@@ -778,7 +797,6 @@ private:
 	static bool WriteAxisLimits(FileStore *f, AxesBitmap axesProbed, const float limits[MaxAxes], int sParam);
 
 	// Heaters - bed is assumed to be the first
-
 	Pin tempSensePins[Heaters];
 	Pin heatOnPins[Heaters];
 	Pin spiTempSenseCsPins[MaxSpiTempSensors];
@@ -786,7 +804,6 @@ private:
 	uint32_t heatSampleTicks;
 
 	// Fans
-
 	Fan fans[NUM_FANS];
 	Pin coolingFanRpmPin;											// we currently support only one fan RPM input
 	uint32_t lastFanCheckTime;
@@ -794,7 +811,6 @@ private:
 	bool FansHardwareInverted(size_t fanNumber) const;
 
   	// Serial/USB
-
 	uint32_t baudRates[NUM_SERIAL_CHANNELS];
 	uint8_t commsParams[NUM_SERIAL_CHANNELS];
 	OutputStack *auxOutput;
@@ -807,10 +823,7 @@ private:
 	uint32_t auxSeq;							// Sequence number for AUX devices
 
 	// Files
-
 	MassStorage* massStorage;
-	FileStore* files[MAX_FILES];
-	bool fileStructureInitialised;
   
 	// Data used by the tick interrupt handler
 
@@ -845,10 +858,10 @@ private:
 	// of the M305 command (e.g., SetThermistorNumber() and array lookups assume range
 	// checking has already been performed.
 
-	AnalogChannelNumber thermistorAdcChannels[Heaters];
+	AnalogChannelNumber filteredAdcChannels[NumAdcFilters];
 	AnalogChannelNumber zProbeAdcChannel;
 	uint8_t tickState;
-	size_t currentHeater;
+	size_t currentFilterNumber;
 	int debugCode;
 
 	// Hotend configuration
@@ -884,8 +897,14 @@ private:
 	PwmPort extrusionAncilliaryPwmPort;
 	PwmPort spindleForwardPort, spindleReversePort, laserPort;
 
+	// Power on/off
+	bool deferredPowerDown;
+
 	// Direct pin manipulation
 	int8_t logicalPinModes[HighestLogicalPin + 1];		// what mode each logical pin is set to - would ideally be class PinMode not int8_t
+
+	// Misc
+	bool deliberateError;								// true if we deliberately caused an exception for testing purposes
 };
 
 // Where the htm etc files are
@@ -1114,6 +1133,11 @@ inline uint16_t Platform::GetRawZProbeReading() const
 {
 	switch (zProbeType)
 	{
+	case 1:
+	case 2:
+	case 3:
+		return min<uint16_t>(AnalogInReadChannel(zProbeAdcChannel), 4000);
+
 	case 4:
 		{
 			const bool b = IoPort::ReadPin(endStopPins[E0_AXIS]);
@@ -1121,6 +1145,7 @@ inline uint16_t Platform::GetRawZProbeReading() const
 		}
 
 	case 5:
+	case 8:
 		return (IoPort::ReadPin(zProbePin)) ? 4000 : 0;
 
 	case 6:
@@ -1129,8 +1154,14 @@ inline uint16_t Platform::GetRawZProbeReading() const
 			return (b) ? 4000 : 0;
 		}
 
+	case 7:
+		{
+			const bool b = IoPort::ReadPin(endStopPins[Z_AXIS]);
+			return (b) ? 4000 : 0;
+		}
+
 	default:
-		return min<uint16_t>(AnalogInReadChannel(zProbeAdcChannel), 4000);
+		return 4000;
 	}
 }
 
@@ -1170,6 +1201,8 @@ inline OutputBuffer *Platform::GetAuxGCodeReply()
 // The bitmaps are organised like this:
 // Duet WiFi:
 //	All step pins are on port D, so the bitmap is just the map of bits in port D.
+// Duet M:
+//	All step pins are on port C, so the bitmap is just the map of bits in port C.
 // Duet 0.6 and 0.8.5:
 //	Step pins are PA0, PC7,9,11,14,25,29 and PD0,3.
 //	The PC and PD bit numbers don't overlap, so we use their actual positions.
@@ -1183,8 +1216,13 @@ inline OutputBuffer *Platform::GetAuxGCodeReply()
 // Calculate the step bit for a driver. This doesn't need to be fast.
 /*static*/ inline uint32_t Platform::CalcDriverBitmap(size_t driver)
 {
+#if defined(__SAME70Q21__)
+	return 0;
+#else
 	const PinDescription& pinDesc = g_APinDescription[STEP_PINS[driver]];
 #if defined(DUET_NG)
+	return pinDesc.ulPin;
+#elif defined(DUET_M)
 	return pinDesc.ulPin;
 #elif defined(DUET_06_085)
 	return (pinDesc.pPort == PIOA) ? pinDesc.ulPin << 1 : pinDesc.ulPin;
@@ -1195,6 +1233,7 @@ inline OutputBuffer *Platform::GetAuxGCodeReply()
 #else
 # error Unknown board
 #endif
+#endif
 }
 
 // Set the specified step pins high and all other step pins low
@@ -1202,8 +1241,12 @@ inline OutputBuffer *Platform::GetAuxGCodeReply()
 // We rely on only those port bits that are step pins being set in the PIO_OWSR register of each port
 /*static*/ inline void Platform::StepDriversHigh(uint32_t driverMap)
 {
-#if defined(DUET_NG)
+#if defined(__SAME70Q21__)
+	// TBD
+#elif defined(DUET_NG)
 	PIOD->PIO_ODSR = driverMap;				// on Duet WiFi all step pins are on port D
+#elif defined(DUET_M)
+	PIOC->PIO_ODSR = driverMap;				// on Duet M all step pins are on port C
 #elif defined(DUET_06_085)
 	PIOD->PIO_ODSR = driverMap;
 	PIOC->PIO_ODSR = driverMap;
@@ -1227,8 +1270,12 @@ inline OutputBuffer *Platform::GetAuxGCodeReply()
 // We rely on only those port bits that are step pins being set in the PIO_OWSR register of each port
 /*static*/ inline void Platform::StepDriversLow()
 {
-#if defined(DUET_NG)
+#if defined(__SAME70Q21__)
+	// TODO
+#elif defined(DUET_NG)
 	PIOD->PIO_ODSR = 0;						// on Duet WiFi all step pins are on port D
+#elif defined(DUET_M)
+	PIOC->PIO_ODSR = 0;						// on Duet M all step pins are on port C
 #elif defined(DUET_06_085)
 	PIOD->PIO_ODSR = 0;
 	PIOC->PIO_ODSR = 0;

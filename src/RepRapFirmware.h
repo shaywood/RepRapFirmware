@@ -29,6 +29,9 @@ Licence: GPL
 
 #include "ecv.h"
 #include "Core.h"
+
+typedef uint16_t PwmFrequency;		// type used to represent a PWM frequency. 0 sometimes means "default".
+
 #include "Configuration.h"
 #include "Pins.h"
 
@@ -56,7 +59,7 @@ enum Module : uint8_t
 	noModule = 15
 };
 
-extern const char *moduleName[];
+extern const char * const moduleName[];
 
 // Warn of what's to come, so we can use pointers to classes without including the entire header files
 class Network;
@@ -87,7 +90,7 @@ class PortControl;
 #endif
 
 // Define floating point type to use for calculations where we would like high precision in matrix calculations
-#if SAM4E || SAM4S
+#if SAM4E || SAM4S || SAME70
 typedef double floatc_t;					// type of matrix element used for calibration
 #else
 // We are more memory-constrained on the SAM3X
@@ -101,9 +104,11 @@ typedef uint32_t FansBitmap;				// Type of a bitmap representing a set of fan nu
 // A single instance of the RepRap class contains all the others
 extern RepRap reprap;
 
-// Functions and globals not part of any class
+// Debugging support
 extern "C" void debugPrintf(const char* fmt, ...) __attribute__ ((format (printf, 1, 2)));
+#define DEBUG_HERE do { debugPrintf("At " __FILE__ " line %d\n", __LINE__); delay(50); } while (false)
 
+// Functions and globals not part of any class
 bool StringEndsWith(const char* string, const char* ending);
 bool StringStartsWith(const char* string, const char* starting);
 bool StringEquals(const char* s1, const char* s2);
@@ -115,6 +120,9 @@ void ListDrivers(const StringRef& str, DriversBitmap drivers);
 
 // Macro to assign an array from an initialiser list
 #define ARRAY_INIT(_dest, _init) static_assert(sizeof(_dest) == sizeof(_init), "Incompatible array types"); memcpy(_dest, _init, sizeof(_init));
+
+// UTF8 code for the degree-symbol
+#define DEGREE_SYMBOL	"\xC2\xB0"	// Unicode degree-symbol as UTF8
 
 // Classes to facilitate range-based for loops that iterate from 0 up to just below a limit
 template<class T> class SimpleRangeIterator
@@ -174,15 +182,15 @@ template<typename BitmapType> inline void ClearBit(BitmapType &b, unsigned int n
 }
 
 // Convert an array of longs to a bit map with overflow checking
-template<typename BitmapType> BitmapType LongArrayToBitMap(const long *arr, size_t numEntries)
+template<typename BitmapType> BitmapType UnsignedArrayToBitMap(const uint32_t *arr, size_t numEntries)
 {
 	BitmapType res = 0;
 	for (size_t i = 0; i < numEntries; ++i)
 	{
-		const long f = arr[i];
-		if (f >= 0 && (unsigned long)f < sizeof(BitmapType) * CHAR_BIT)
+		const uint32_t f = arr[i];
+		if (f < sizeof(BitmapType) * CHAR_BIT)
 		{
-			SetBit(res, (unsigned int)f);
+			SetBit(res, f);
 		}
 	}
 	return res;
@@ -195,32 +203,38 @@ template<typename BitmapType> BitmapType LongArrayToBitMap(const long *arr, size
 extern StringRef scratchString;
 
 // Common definitions used by more than one module
-const size_t XYZ_AXES = 3;										// The number of Cartesian axes
-const size_t X_AXIS = 0, Y_AXIS = 1, Z_AXIS = 2, E0_AXIS = 3;	// The indices of the Cartesian axes in drive arrays
-const size_t CoreXYU_AXES = 5;									// The number of axes in a CoreXYU machine
-const size_t U_AXIS = 3, V_AXIS = 4;							// The indices of the U and V motors in a CoreXYU machine (needed by Platform)
+constexpr size_t XYZ_AXES = 3;										// The number of Cartesian axes
+constexpr size_t X_AXIS = 0, Y_AXIS = 1, Z_AXIS = 2, E0_AXIS = 3;	// The indices of the Cartesian axes in drive arrays
+constexpr size_t CoreXYU_AXES = 5;									// The number of axes in a CoreXYU machine (there is a hidden V axis)
+constexpr size_t CoreXYUV_AXES = 5;									// The number of axes in a CoreXYUV machine
+constexpr size_t U_AXIS = 3, V_AXIS = 4;							// The indices of the U and V motors in a CoreXYU machine (needed by Platform)
 
 // Common conversion factors
-const float MinutesToSeconds = 60.0;
-const float SecondsToMinutes = 1.0/MinutesToSeconds;
-const float SecondsToMillis = 1000.0;
-const float MillisToSeconds = 0.001;
-const float InchToMm = 25.4;
-const float DegreesToRadians = PI/180.0;
-const float RadiansToDegrees = 180.0/PI;
+constexpr float MinutesToSeconds = 60.0;
+constexpr float SecondsToMinutes = 1.0/MinutesToSeconds;
+constexpr float SecondsToMillis = 1000.0;
+constexpr float MillisToSeconds = 0.001;
+constexpr float InchToMm = 25.4;
+constexpr float DegreesToRadians = PI/180.0;
+constexpr float RadiansToDegrees = 180.0/PI;
 
-#define DEGREE_SYMBOL	"\xC2\xB0"								// degree-symbol encoding in UTF8
+#define DEGREE_SYMBOL	"\xC2\xB0"									// degree-symbol encoding in UTF8
 
 // Type of an offset in a file
 typedef uint32_t FilePosition;
 const FilePosition noFilePosition = 0xFFFFFFFF;
 
 // Interrupt priorities - must be chosen with care! 0 is the highest priority, 15 is the lowest.
-const uint32_t NvicPriorityUart = 1;			// UART is highest to avoid character loss (it has only a 1-character receive buffer)
-const uint32_t NvicPriorityDriversUsart = 2;	// USART used to control and monitor the TMC2660 drivers
+#if SAM4E || SAME70
+const uint32_t NvicPriorityWatchdog = 0;		// the secondary watchdog has the highest priority
+#endif
+
+const uint32_t NvicPriorityPanelDueUart = 1;	// UART is highest to avoid character loss (it has only a 1-character receive buffer)
+const uint32_t NvicPriorityDriversSerialTMC = 2;// USART or UART used to control and monitor the smart drivers
 const uint32_t NvicPrioritySystick = 3;			// systick kicks the watchdog and starts the ADC conversions, so must be quite high
 const uint32_t NvicPriorityPins = 4;			// priority for GPIO pin interrupts - filament sensors must be higher than step
 const uint32_t NvicPriorityStep = 5;			// step interrupt is next highest, it can preempt most other interrupts
+const uint32_t NvicPriorityWiFiUart = 6;		// UART used to receive debug data from the WiFi module
 const uint32_t NvicPriorityUSB = 6;				// USB interrupt
 
 #if HAS_LWIP_NETWORKING

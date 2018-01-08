@@ -20,10 +20,10 @@ INCLUDES := -I"$(DUET_BOARD_PATH)/cores/arduino" -I"$(DUET_BOARD_PATH)/asf" -I"$
 INCLUDES += -I"$(DUET_LIBRARY_PATH)/Flash" -I"$(DUET_LIBRARY_PATH)/RTCDue" -I"$(DUET_LIBRARY_PATH)/SharedSpi" -I"$(DUET_LIBRARY_PATH)/Storage" -I"$(DUET_LIBRARY_PATH)/Wire"
 
 # Set board options
-INCLUDES += -I"$(PWD)" -I"$(PWD)/DuetNG" -I"$(PWD)/DuetNG/DuetEthernet" -I"$(PWD)/DuetNG/DuetEthernet/Wiznet/Ethernet"
+INCLUDES += -I"$(PWD)" -I"$(PWD)/DuetNG" -I"$(PWD)/DuetNG/DuetEthernet" -I"$(PWD)/Network2" -I"$(PWD)/Network2/W5500" -I"$(PWD)/Network2/W5500/Wiznet/Ethernet"
 
 # Get source files
-VPATH := $(PWD) $(PWD)/DuetNG $(PWD)/FilamentSensors $(PWD)/DuetNG/DuetEthernet $(PWD)/DuetNG/DuetEthernet/Wiznet/Ethernet $(PWD)/DuetNG/DuetEthernet/Wiznet/Ethernet/W5500 $(PWD)/DuetNG/DuetEthernet/Wiznet/Internet/DHCP $(PWD)/GCodes $(PWD)/Heating $(PWD)/Heating/Sensors $(PWD)/Movement $(PWD)/Movement/BedProbing $(PWD)/Movement/Kinematics $(PWD)/Storage $(PWD)/Tools
+VPATH := $(PWD) $(PWD)/DuetNG $(PWD)/FilamentSensors $(PWD)/Network2/W5500 $(PWD)/Network2/W5500/Wiznet/Ethernet $(PWD)/Network2/W5500/Wiznet/Ethernet/W5500 $(PWD)/Network2/W5500/Wiznet/Internet/DHCP $(PWD)/GCodes $(PWD)/Heating $(PWD)/Heating/Sensors $(PWD)/Movement $(PWD)/Network2 $(PWD)/Movement/BedProbing $(PWD)/Movement/Kinematics $(PWD)/Storage $(PWD)/Tools
 VPATH += $(PWD)/Libraries/Fatfs $(PWD)/Libraries/General $(PWD)/Libraries/Math $(PWD)/Libraries/MCP4461 $(PWD)/Libraries/TemperatureSensor $(PWD)/Libraries/sha1
 
 C_SOURCES += $(foreach dir,$(VPATH),$(wildcard $(dir)/*.c)) $(wildcard $(PWD)/*.c)

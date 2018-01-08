@@ -35,7 +35,16 @@ enum MessageType : uint16_t
 	WarningMessage = GenericMessage | LogMessage | WarningMessageFlag,		// A warning message
 	FirmwareUpdateMessage = UsbMessage | ImmediateLcdMessage,				// A message that conveys progress of a firmware update
 	FirmwareUpdateErrorMessage = FirmwareUpdateMessage | ErrorMessageFlag,	// A message that reports an error during a firmware update
-	NetworkInfoMessage = UsbMessage | LcdMessage | LogMessage			 	// A message that conveys information about the state of the network interface
+	NetworkInfoMessage = UsbMessage | LcdMessage | LogMessage,			 	// A message that conveys information about the state of the network interface
+
+	// Masks
+	MessageDestinationMask = 0x00FF,
+	MessageFlagsMask = 0x00F0
 };
+
+inline MessageType AddError(MessageType mt)
+{
+	return (MessageType)(mt | ErrorMessageFlag);
+}
 
 #endif /* MESSAGETYPE_H_ */

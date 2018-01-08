@@ -93,8 +93,8 @@
 
 //***************************************************************************************************
 
-const char* overflowResponse = "overflow";
-const char* badEscapeResponse = "bad escape";
+const char* const overflowResponse = "overflow";
+const char* const badEscapeResponse = "bad escape";
 
 //**************************** Generic Webserver implementation ******************************
 
@@ -548,55 +548,26 @@ bool Webserver::HttpInterpreter::DoingFastUpload() const
 	return false;
 }
 
+// Write some data on the SD card
 void Webserver::HttpInterpreter::DoFastUpload()
 {
-	NetworkTransaction *transaction = webserver->currentTransaction;
-
-	// Write some data on the SD card
+	NetworkTransaction * const transaction = webserver->currentTransaction;
 	const char *buffer;
 	size_t len;
 	if (transaction->ReadBuffer(buffer, len))
 	{
 		network->Unlock();
-		// Write data in sector-aligned chunks. This also means that the buffer in fatfs is only used to hold the FAT.
-		// Buffer size must be a multiple of the 512b sector size.
-#ifdef DUET_NG
-		static const size_t writeBufLength = 8192;
-#else
-		static const size_t writeBufLength = 2048;
-#endif
-		static uint32_t writeBufStorage[writeBufLength/4];		// aligned buffer for file writes
-		static size_t writeBufIndex;
-		char* const writeBuf = reinterpret_cast<char *>(writeBufStorage);
-
-		if (uploadedBytes == 0)
+		const bool success = fileBeingUploaded.Write(buffer, len);
+		if (!success)
 		{
-			writeBufIndex = 0;
-		}
+			platform->Message(GenericMessage, "Error: Could not write upload data!\n");
+			CancelUpload();
 
-		while (len != 0)
-		{
-			const size_t lengthToCopy = min<size_t>(writeBufLength - writeBufIndex, len);
-			memcpy(writeBuf + writeBufIndex, buffer, lengthToCopy);
-			writeBufIndex += lengthToCopy;
-			uploadedBytes += lengthToCopy;
-			buffer += lengthToCopy;
-			len -= lengthToCopy;
-			if (writeBufIndex == writeBufLength || uploadedBytes >= postFileLength)
-			{
-				const bool success = fileBeingUploaded.Write(writeBuf, writeBufIndex);
-				writeBufIndex = 0;
-				if (!success)
-				{
-					platform->Message(GenericMessage, "Error: Could not write upload data!\n");
-					CancelUpload();
-
-					while (!network->Lock()) { }
-					SendJsonResponse("upload");
-					return;
-				}
-			}
+			while (!network->Lock()) { }
+			SendJsonResponse("upload");
+			return;
 		}
+		uploadedBytes += len;
 		while (!network->Lock()) { }
 	}
 
@@ -604,7 +575,7 @@ void Webserver::HttpInterpreter::DoFastUpload()
 	if (uploadState == uploadOK && uploadedBytes >= postFileLength)
 	{
 		// Reset POST upload state for this client
-		uint32_t remoteIP = transaction->GetRemoteIP();
+		const uint32_t remoteIP = transaction->GetRemoteIP();
 		for(size_t i = 0; i < numSessions; i++)
 		{
 			if (sessions[i].ip == remoteIP && sessions[i].isPostUploading)
@@ -662,7 +633,7 @@ void Webserver::HttpInterpreter::SendFile(const char* nameOfFileToSend, bool isW
 			char nameBuf[FILENAME_LENGTH + 1];
 			strcpy(nameBuf, nameOfFileToSend);
 			strcat(nameBuf, ".gz");
-			fileToSend = platform->GetFileStore(platform->GetWebDir(), nameBuf, OpenMode::read);
+			fileToSend = platform->OpenFile(platform->GetWebDir(), nameBuf, OpenMode::read);
 			if (fileToSend != nullptr)
 			{
 				zip = true;
@@ -672,14 +643,14 @@ void Webserver::HttpInterpreter::SendFile(const char* nameOfFileToSend, bool isW
 		// If that failed, try to open the normal version of the file
 		if (fileToSend == nullptr)
 		{
-			fileToSend = platform->GetFileStore(platform->GetWebDir(), nameOfFileToSend, OpenMode::read);
+			fileToSend = platform->OpenFile(platform->GetWebDir(), nameOfFileToSend, OpenMode::read);
 		}
 
 		// If we still couldn't find the file and it was an HTML file, return the 404 error page
 		if (fileToSend == nullptr && (StringEndsWith(nameOfFileToSend, ".html") || StringEndsWith(nameOfFileToSend, ".htm")))
 		{
 			nameOfFileToSend = FOUR04_PAGE_FILE;
-			fileToSend = platform->GetFileStore(platform->GetWebDir(), nameOfFileToSend, OpenMode::read);
+			fileToSend = platform->OpenFile(platform->GetWebDir(), nameOfFileToSend, OpenMode::read);
 		}
 
 		if (fileToSend == nullptr)
@@ -691,7 +662,7 @@ void Webserver::HttpInterpreter::SendFile(const char* nameOfFileToSend, bool isW
 	}
 	else
 	{
-		fileToSend = platform->GetFileStore(FS_PREFIX, nameOfFileToSend, OpenMode::read);
+		fileToSend = platform->OpenFile(FS_PREFIX, nameOfFileToSend, OpenMode::read);
 		if (fileToSend == nullptr)
 		{
 			RejectMessage("not found", 404);
@@ -1565,7 +1536,7 @@ bool Webserver::HttpInterpreter::ProcessMessage()
 				}
 
 				// Start a new file upload
-				FileStore *file = platform->GetFileStore(FS_PREFIX, filename, OpenMode::write);
+				FileStore *file = platform->OpenFile(FS_PREFIX, filename, OpenMode::write);
 				if (!StartUpload(file, filename))
 				{
 					return RejectMessage("could not start file upload");
@@ -2253,7 +2224,7 @@ void Webserver::FtpInterpreter::ProcessLine()
 			{
 				ReadFilename(4);
 
-				FileStore *file = platform->GetFileStore(currentDir, filename, OpenMode::write);
+				FileStore *file = platform->OpenFile(currentDir, filename, OpenMode::write);
 				if (StartUpload(file, filename))
 				{
 					SendReply(150, "OK to send data.");
@@ -2271,7 +2242,7 @@ void Webserver::FtpInterpreter::ProcessLine()
 			{
 				ReadFilename(4);
 
-				FileStore *file = platform->GetFileStore(currentDir, filename, OpenMode::read);
+				FileStore *file = platform->OpenFile(currentDir, filename, OpenMode::read);
 				if (file == nullptr)
 				{
 					SendReply(550, "Failed to open file.");

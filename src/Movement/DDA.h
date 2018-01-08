@@ -75,7 +75,7 @@ public:
 
 	int32_t GetStepsTaken(size_t drive) const;
 
-	float GetProportionDone(bool moveWasAborted) const;				// Return the proportion of extrusion for the complete multi-segment move already done
+	float GetProportionDone(bool moveWasAborted) const;						// Return the proportion of extrusion for the complete multi-segment move already done
 
 	void MoveAborted();
 
@@ -91,7 +91,8 @@ public:
 	uint32_t GetStepInterval(size_t axis, uint32_t microstepShift) const;	// Get the current full step interval for this axis or extruder
 #endif
 
-	void DebugPrint() const;
+	void DebugPrint() const;												// print the DDA only
+	void DebugPrintAll() const;												// print the DDA and active DMs
 
 	static constexpr uint32_t stepClockRate = VARIANT_MCK/128;				// the frequency of the clock used for stepper pulse timing (see Platform::InitialiseInterrupts)
 	static constexpr uint64_t stepClockRateSquared = (uint64_t)stepClockRate * stepClockRate;
@@ -102,7 +103,12 @@ public:
 	// the calculation can just be managed in time at speeds of 15000mm/min (step interval 50us), but not at 20000mm/min (step interval 37.5us).
 	// Therefore, where the step interval falls below 60us, we don't calculate on every step.
 	// Note: the above measurements were taken some time ago, before some firmware optimisations.
-#if SAM4E || SAM4S
+#if SAME70
+	// The system clock of the SAME70 is running at 150MHz. Use the same defaults as for the SAM4E for now.
+	static constexpr int32_t MinCalcIntervalDelta = (40 * stepClockRate)/1000000; 		// the smallest sensible interval between calculations (40us) in step timer clocks
+	static constexpr int32_t MinCalcIntervalCartesian = (40 * stepClockRate)/1000000;	// same as delta for now, but could be lower
+	static constexpr uint32_t minInterruptInterval = 6;									// about 6us minimum interval between interrupts, in step clocks
+#elif SAM4E || SAM4S
 	static constexpr int32_t MinCalcIntervalDelta = (40 * stepClockRate)/1000000; 		// the smallest sensible interval between calculations (40us) in step timer clocks
 	static constexpr int32_t MinCalcIntervalCartesian = (40 * stepClockRate)/1000000;	// same as delta for now, but could be lower
 	static constexpr uint32_t minInterruptInterval = 6;									// about 6us minimum interval between interrupts, in step clocks
@@ -123,8 +129,9 @@ public:
 	static uint32_t maxReps;
 
 private:
+	DriveMovement *FindDM(size_t drive) const;
 	void RecalculateMove() __attribute__ ((hot));
-	void CalcNewSpeeds() __attribute__ ((hot));
+	void MatchSpeeds() __attribute__ ((hot));
 	void ReduceHomingSpeed();										// called to reduce homing speed when a near-endstop is triggered
 	void StopDrive(size_t drive);									// stop movement of a drive and recalculate the endpoint
 	void InsertDM(DriveMovement *dm) __attribute__ ((hot));
@@ -135,7 +142,7 @@ private:
 	void CheckEndstops(Platform& platform);
 	float NormaliseXYZ();											// Make the direction vector unit-normal in XYZ
 
-	static void DoLookahead(DDA *laDDA);							// Try to smooth out moves in the queue
+	static void DoLookahead(DDA *laDDA) __attribute__ ((hot));		// Try to smooth out moves in the queue
     static float Normalise(float v[], size_t dim1, size_t dim2);  	// Normalise a vector of dim1 dimensions to unit length in the first dim1 dimensions
     static void Absolute(float v[], size_t dimensions);				// Put a vector in the positive hyperquadrant
     static float Magnitude(const float v[], size_t dimensions);  	// Return the length of a vector
@@ -196,6 +203,9 @@ private:
 	// These are calculated from the above and used in the ISR, so they are set up by Prepare()
 	uint32_t clocksNeeded;					// in clocks
 	uint32_t moveStartTime;					// clock count at which the move was started
+	uint32_t startSpeedTimesCdivA;			// the number of clocks it would have taken t reach the start speed form rest
+	uint32_t topSpeedTimesCdivAPlusDecelStartClocks;
+	int32_t extraAccelerationClocks;		// the additional number of clocks needed because we started the move at less than topSpeed. Negative after ReduceHomingSpeed has been called.
 
 	float proportionLeft;					// what proportion of the extrusion in the G1 or G0 move of which this is a part remains to be done after this segment is complete
 
@@ -213,6 +223,12 @@ private:
 	DriveMovement *pddm[DRIVES];			// These describe the state of each drive movement
 };
 
+// Find the DriveMovement record for a given drive, or return nullptr if there isn't one
+inline DriveMovement *DDA::FindDM(size_t drive) const
+{
+	return pddm[drive];
+}
+
 // Force an end point
 inline void DDA::SetDriveCoordinate(int32_t a, size_t drive)
 {
@@ -225,7 +241,7 @@ inline void DDA::SetDriveCoordinate(int32_t a, size_t drive)
 // Get the current full step interval for this axis or extruder
 inline uint32_t DDA::GetStepInterval(size_t axis, uint32_t microstepShift) const
 {
-	const DriveMovement * const dm = pddm[axis];
+	const DriveMovement * const dm = FindDM(axis);
 	return (dm != nullptr) ? dm->GetStepInterval(microstepShift) : 0;
 }
 

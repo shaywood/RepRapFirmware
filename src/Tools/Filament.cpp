@@ -13,8 +13,8 @@
 
 #include <ctime>
 
-const char *Filament::FilamentAssignmentFile = "filaments.csv";
-const char *Filament::FilamentAssignmentFileComment = "RepRapFirmware filament assignment file v1";
+const char * const Filament::FilamentAssignmentFile = "filaments.csv";
+const char * const Filament::FilamentAssignmentFileComment = "RepRapFirmware filament assignment file v1";
 
 Filament *Filament::filamentList = nullptr;
 
@@ -41,7 +41,7 @@ void Filament::Unload()
 
 void Filament::LoadAssignment()
 {
-	FileStore *file = reprap.GetPlatform().GetFileStore(SYS_DIR, FilamentAssignmentFile, OpenMode::read);
+	FileStore *file = reprap.GetPlatform().OpenFile(SYS_DIR, FilamentAssignmentFile, OpenMode::read);
 	if (file == nullptr)
 	{
 		// May happen, but not critical
@@ -78,7 +78,7 @@ void Filament::LoadAssignment()
 
 /*static*/ void Filament::SaveAssignments()
 {
-	FileStore *file = reprap.GetPlatform().GetFileStore(SYS_DIR, FilamentAssignmentFile, OpenMode::write);
+	FileStore *file = reprap.GetPlatform().OpenFile(SYS_DIR, FilamentAssignmentFile, OpenMode::write);
 	if (file == nullptr)
 	{
 		// Should never happen

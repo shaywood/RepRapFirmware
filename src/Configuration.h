@@ -50,7 +50,6 @@ constexpr uint32_t LogFlushInterval = 15000;			// Milliseconds
 constexpr uint32_t DriverCoolingTimeout = 4000;			// Milliseconds
 constexpr float DefaultMessageTimeout = 10.0;			// How long a message is displayed by default, in seconds
 
-
 // FanCheckInterval must be lower than MinimumWarningInterval to avoid giving driver over temperature warnings too soon when thermostatic control of electronics cooling fans is used
 static_assert(FanCheckInterval < MinimumWarningInterval, "FanCheckInterval too large");
 
@@ -78,16 +77,25 @@ constexpr float ThermostatHysteresis = 1.0;				// How much hysteresis we use to 
 constexpr float BAD_ERROR_TEMPERATURE = 2000.0;			// Must exceed any reasonable 5temperature limit including DEFAULT_TEMPERATURE_LIMIT
 constexpr uint32_t DefaultHeaterFaultTimeout = 10 * 60 * 1000;	// How long we wait (in milliseconds) for user intervention after a heater fault before shutting down
 
+constexpr PwmFrequency MaxHeaterPwmFrequency = 1000;	// maximum supported heater PWM frequency, to avoid overheating the mosfets
+
 // Heating model default parameters. For the chamber heater, we use the same values as for the bed heater.
 // These parameters are about right for an E3Dv6 hot end with 30W heater.
 constexpr float DefaultHotEndHeaterGain = 340.0;
 constexpr float DefaultHotEndHeaterTimeConstant = 140.0;
 constexpr float DefaultHotEndHeaterDeadTime = 5.5;
 
+#if SAM4E
+constexpr size_t NumBedHeaters = 4;
+constexpr size_t NumChamberHeaters = 2;
+constexpr int8_t DefaultBedHeaters[NumBedHeaters] = { 0, -1, -1, -1 };
+constexpr int8_t DefaultChamberHeaters[NumChamberHeaters] = { -1, -1 };
+#else
 constexpr size_t NumBedHeaters = 1;
 constexpr size_t NumChamberHeaters = 2;
 constexpr int8_t DefaultBedHeaters[NumBedHeaters] = { 0 };
 constexpr int8_t DefaultChamberHeaters[NumChamberHeaters] = { -1, -1 };
+#endif
 
 constexpr int8_t DefaultE0Heater = 1;					// Index of the default first extruder heater
 
@@ -119,6 +127,7 @@ constexpr unsigned int FirstRtdChannel = 200;			// Temperature sensor channels 2
 constexpr unsigned int FirstLinearAdcChannel = 300;		// Temperature sensor channels 300... use an ADC that provides a linear output over a temperature range
 constexpr unsigned int DhtTemperatureChannel = 400;		// Temperature sensor channel 400 for DHTxx temperature
 constexpr unsigned int DhtHumidityChannel = 401;		// Temperature sensor channel 401 for DHTxx humidity
+constexpr unsigned int FirstPT1000Channel = 500;		// Temperature sensor channels 500... are PT1000 sensors connected to thermistor inputs
 constexpr unsigned int CpuTemperatureSenseChannel = 1000;  // Sensor 1000 is the MCJU's own temperature sensor
 constexpr unsigned int FirstTmcDriversSenseChannel = 1001; // Sensors 1001..1002 are the TMC2660 driver temperature sense
 constexpr unsigned int NumTmcDriversSenseChannels = 2;	// Sensors 1001..1002 are the TMC2660 driver temperature sense
@@ -126,7 +135,7 @@ constexpr unsigned int NumTmcDriversSenseChannels = 2;	// Sensors 1001..1002 are
 // PWM frequencies
 constexpr unsigned int SlowHeaterPwmFreq = 10;			// slow PWM frequency for bed and chamber heaters, compatible with DC/AC SSRs
 constexpr unsigned int NormalHeaterPwmFreq = 250;		// normal PWM frequency used for hot ends
-constexpr unsigned int DefaultFanPwmFreq = 250;			// increase to 25kHz using M106 command to meet Intel 4-wire PWM fan specification
+constexpr PwmFrequency DefaultFanPwmFreq = 250;			// increase to 25kHz using M106 command to meet Intel 4-wire PWM fan specification
 constexpr unsigned int DefaultPinWritePwmFreq = 500;	// default PWM frequency for M42 pin writes and extrusion ancillary PWM
 
 // Default Z probe values
@@ -137,41 +146,51 @@ constexpr unsigned int DefaultPinWritePwmFreq = 500;	// default PWM frequency fo
 //     Using single-precision maths and up to 9-factor calibration: (9 + 5) * 4 bytes per point
 //     Using double-precision maths and up to 9-factor calibration: (9 + 5) * 8 bytes per point
 //   So 32 points using double precision arithmetic need 3584 bytes of stack space.
-#if SAM4E || SAM4S
+#if SAM4E || SAM4S || SAME70
 constexpr size_t MaxGridProbePoints = 441;				// 441 allows us to probe e.g. 400x400 at 20mm intervals
 constexpr size_t MaxXGridPoints = 41;					// Maximum number of grid points in one X row
 constexpr size_t MaxProbePoints = 32;					// Maximum number of G30 probe points
-constexpr size_t MaxDeltaCalibrationPoints = 32;		// Should a power of 2 for speed
+constexpr size_t MaxCalibrationPoints = 32;				// Should a power of 2 for speed
 #elif SAM3XA
 constexpr size_t MaxGridProbePoints = 121;				// 121 allows us to probe 200x200 at 20mm intervals
 constexpr size_t MaxXGridPoints = 21;					// Maximum number of grid points in one X row
 constexpr size_t MaxProbePoints = 32;					// Maximum number of G30 probe points
-constexpr size_t MaxDeltaCalibrationPoints = 32;		// Should a power of 2 for speed
+constexpr size_t MaxCalibrationPoints = 32;				// Should a power of 2 for speed
 #else
 # error
 #endif
 
-const float DefaultGridSpacing = 20.0;				// Default bed probing grid spacing in mm
+const float DefaultGridSpacing = 20.0;					// Default bed probing grid spacing in mm
 
 static_assert(MaxProbePoints <= MaxGridProbePoints, "MaxProbePoints must be <= MaxGridProbePoints");
-static_assert(MaxDeltaCalibrationPoints <= MaxProbePoints, "MaxDeltaCalibrationPoints must be <= MaxProbePoints");
+static_assert(MaxCalibrationPoints <= MaxProbePoints, "MaxDeltaCalibrationPoints must be <= MaxProbePoints");
 
+// SD card
+constexpr uint32_t SdCardDetectDebounceMillis = 200;	// How long we give the SD card to settle in the socket
+
+// Z probing
 constexpr float DEFAULT_Z_DIVE = 5.0;					// Millimetres
 constexpr float DEFAULT_PROBE_SPEED = 2.0;				// Default Z probing speed mm/sec
 constexpr float DEFAULT_TRAVEL_SPEED = 100.0;			// Default speed for travel to probe points
 constexpr float ZProbeMaxAcceleration = 250.0;			// Maximum Z acceleration to use at the start of a probing move
 constexpr size_t MaxZProbeProgramBytes = 8;				// Maximum number of bytes in a Z probe program
+constexpr uint32_t ProbingSpeedReductionFactor = 3;		// The factor by which we reduce the Z probing speed when we get a 'near' indication
 
 constexpr float TRIANGLE_ZERO = -0.001;					// Millimetres
 constexpr float SILLY_Z_VALUE = -9999.0;				// Millimetres
 
 // String lengths
-
 constexpr size_t FORMAT_STRING_LENGTH = 256;
 constexpr size_t MACHINE_NAME_LENGTH = 40;
 constexpr size_t PASSWORD_LENGTH = 20;
 
-constexpr size_t GCODE_LENGTH = 100;
+#if SAM4E || SAM4S || SAME70
+// Increased GCODE_LENGTH on the SAM4 because M587 and M589 commands on the Duet WiFi can get very long
+constexpr size_t GCODE_LENGTH = 161;					// maximum number of non-comment characters in a line of GCode including the null terminator
+#else
+constexpr size_t GCODE_LENGTH = 101;					// maximum number of non-comment characters in a line of GCode including the null terminator
+#endif
+
 constexpr size_t GCODE_REPLY_LENGTH = 2048;
 constexpr size_t MESSAGE_LENGTH = 256;
 
@@ -179,7 +198,7 @@ constexpr size_t FILENAME_LENGTH = 100;
 constexpr size_t MaxHeaterNameLength = 20;				// Maximum number of characters in a heater name
 
 // Output buffer lengths
-#if SAM4E || SAM4S
+#if SAM4E || SAM4S || SAME70
 constexpr uint16_t OUTPUT_BUFFER_SIZE = 256;			// How many bytes does each OutputBuffer hold?
 constexpr size_t OUTPUT_BUFFER_COUNT = 32;				// How many OutputBuffer instances do we have?
 constexpr size_t RESERVED_OUTPUT_BUFFERS = 1;			// Number of reserved output buffers after long responses. Must be enough for an HTTP header
@@ -201,6 +220,8 @@ constexpr float DefaultArcSegmentLength = 0.2;			// G2 and G3 arc movement comma
 constexpr uint32_t DefaultIdleTimeout = 30000;			// Milliseconds
 constexpr float DefaultIdleCurrentFactor = 0.3;			// Proportion of normal motor current that we use for idle hold
 
+constexpr float DefaultNonlinearExtrusionLimit = 0.2;	// Maximum additional commanded extrusion to compensate for nonlinearity
+
 // Triggers
 constexpr unsigned int MaxTriggers = 10;				// Must be <= 32 because we store a bitmap of pending triggers in a uint32_t
 
@@ -213,6 +234,11 @@ constexpr unsigned int MaxStackDepth = 5;				// Maximum depth of stack
 // CNC and laser support
 constexpr float DefaultMaxSpindleRpm = 10000;			// Default spindle RPM at full PWM
 constexpr float DefaultMaxLaserPower = 255.0;			// Power setting in M3 command for full power
+
+// File handling
+
+constexpr size_t MAX_FILES = 10;					// Must be large enough to handle the max number of simultaneous web requests + files being printed
+constexpr size_t FILE_BUFFER_SIZE = 256;
 
 // Webserver stuff
 

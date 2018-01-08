@@ -52,10 +52,10 @@ public:
 	static void Spin(bool full);
 
 	// Return the filament sensor associated with a particular extruder
-	static FilamentSensor *GetFilamentSensor(int extruder);
+	static FilamentSensor *GetFilamentSensor(unsigned int extruder);
 
 	// Set the filament sensor associated with a particular extruder
-	static bool SetFilamentSensorType(int extruder, int newSensorType);
+	static bool SetFilamentSensorType(unsigned int extruder, int newSensorType);
 
 	// Send diagnostics info
 	static void Diagnostics(MessageType mtype);
@@ -73,7 +73,7 @@ private:
 	// Create a filament sensor returning null if not a valid sensor type
 	static FilamentSensor *Create(int type);
 
-	static void InterruptEntry(void *param);
+	static void InterruptEntry(CallbackParameter param);
 
 	static FilamentSensor *filamentSensors[MaxExtruders];
 

@@ -53,7 +53,7 @@ bool Duet3DFilamentSensor::Configure(GCodeBuffer& gb, StringRef& reply, bool& se
 	}
 	else
 	{
-		reply.printf("Duet3D filament sensor on endstop %u, %s microswitch, %.1fmm per rev, check every %.1fmm, tolerance %.1f%%, ",
+		reply.printf("Duet3D filament monitor on E%u, %s microswitch, %.2fmm/rev, check every %.1fmm, tolerance %.1f%%, ",
 						GetEndstopNumber(), (withSwitch) ? "with" : "no", (double)mmPerRev, (double)minimumExtrusionCheckLength, (double)(tolerance * 100.0));
 
 		if (!dataReceived)
@@ -66,7 +66,19 @@ bool Duet3DFilamentSensor::Configure(GCodeBuffer& gb, StringRef& reply, bool& se
 		}
 		else
 		{
-			reply.catf("current angle %.1f", (double)GetCurrentAngle());
+			reply.catf("current angle %.1f, ", (double)GetCurrentAngle());
+			if (calibrationStarted && fabsf(totalRevsMeasured) > 1.0 && totalExtrusionCommanded > 20.0)
+			{
+				const float measuredMmPerRev = totalExtrusionCommanded/totalRevsMeasured;
+				const float normalRatio = 1.0/measuredMmPerRev;
+				const int measuredPosTolerance = lrintf(100.0 * (((normalRatio > 0.0) ? maxMovementRatio : minMovementRatio) - normalRatio)/normalRatio);
+				const int measuredNegTolerance = lrintf(100.0 * (normalRatio - ((normalRatio > 0.0) ? minMovementRatio : maxMovementRatio))/normalRatio);
+				reply.catf("measured %.2fmm/rev +%d%% -%d%% over %.1fmm\n", (double)measuredMmPerRev, measuredPosTolerance, measuredNegTolerance, (double)totalExtrusionCommanded);
+			}
+			else
+			{
+				reply.cat("no calibration data");
+			}
 		}
 	}
 
@@ -343,31 +355,30 @@ FilamentSensorStatus Duet3DFilamentSensor::CheckFilament(float amountCommanded, 
 			}
 		}
 	}
+
+	// Update the calibration accumulators, even if the user hasn't asked to do calibration
+	const float ratio = accumulatedRevsMeasured/amountCommanded;
+	if (calibrationStarted)
+	{
+		if (ratio < minMovementRatio)
+		{
+			minMovementRatio = ratio;
+		}
+		if (ratio > maxMovementRatio)
+		{
+			maxMovementRatio = ratio;
+		}
+		totalExtrusionCommanded += amountCommanded;
+		totalRevsMeasured += accumulatedRevsMeasured;
+	}
 	else
 	{
-		// Tolerance < 0.0 means do calibration
-		const float ratio = accumulatedRevsMeasured/amountCommanded;
-		if (calibrationStarted)
-		{
-			if (ratio < minMovementRatio)
-			{
-				minMovementRatio = ratio;
-			}
-			if (ratio > maxMovementRatio)
-			{
-				maxMovementRatio = ratio;
-			}
-			totalExtrusionCommanded += amountCommanded;
-			totalRevsMeasured += accumulatedRevsMeasured;
-		}
-		else
-		{
-			minMovementRatio = maxMovementRatio = ratio;
-			totalExtrusionCommanded = amountCommanded;
-			totalRevsMeasured = accumulatedRevsMeasured;
-			calibrationStarted = true;
-		}
+		minMovementRatio = maxMovementRatio = ratio;
+		totalExtrusionCommanded = amountCommanded;
+		totalRevsMeasured = accumulatedRevsMeasured;
+		calibrationStarted = true;
 	}
+
 	accumulatedExtrusionCommanded -= amountCommanded;
 	extrusionCommandedAtLastMeasurement = accumulatedRevsMeasured = 0.0;
 

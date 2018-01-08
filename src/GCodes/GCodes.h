@@ -167,6 +167,7 @@ public:
 	bool IsResuming() const;
 	bool IsRunning() const;
 	bool IsReallyPrinting() const;										// Return true if we are printing from SD card and not pausing, paused or resuming
+	bool IsSimulating() const { return simulationMode != 0; }
 	bool IsDoingToolChange() const { return doingToolChange; }
 
 	bool AllAxesAreHomed() const;										// Return true if all axes are homed
@@ -244,8 +245,11 @@ private:
 	void SetBedEquationWithProbe(int sParam, StringRef& reply);			// Probes a series of points and sets the bed equation
 	GCodeResult SetPrintZProbe(GCodeBuffer& gb, StringRef& reply);		// Either return the probe value, or set its threshold
 	GCodeResult SetOrReportOffsets(GCodeBuffer& gb, StringRef& reply);	// Deal with a G10
-
 	GCodeResult SetPositions(GCodeBuffer& gb);							// Deal with a G92
+	GCodeResult DoDriveMapping(GCodeBuffer& gb, StringRef& reply);		// Deal with a M584
+	GCodeResult ProbeTool(GCodeBuffer& gb, StringRef& reply);			// Deal with a M585
+	GCodeResult SetDateTime(GCodeBuffer& gb, StringRef& reply);			// Deal with a M905
+
 	bool LoadExtrusionAndFeedrateFromGCode(GCodeBuffer& gb, int moveType); // Set up the extrusion and feed rate of a move for the Move class
 
 	bool Push(GCodeBuffer& gb);											// Push feedrate etc on the stack
@@ -262,7 +266,7 @@ private:
 	void SetPidParameters(GCodeBuffer& gb, int heater, StringRef& reply); // Set the P/I/D parameters for a heater
 	GCodeResult SetHeaterParameters(GCodeBuffer& gb, StringRef& reply);	// Set the thermistor and ADC parameters for a heater, returning true if an error occurs
 	bool ManageTool(GCodeBuffer& gb, StringRef& reply);					// Create a new tool definition, returning true if an error was reported
-	void SetToolHeaters(Tool *tool, float temperature);					// Set all a tool's heaters to the temperature, for M104
+	void SetToolHeaters(Tool *tool, float temperature, bool both);		// Set all a tool's heaters to the temperature, for M104/M109
 	bool ToolHeatersAtSetTemperatures(const Tool *tool, bool waitWhenCooling) const; // Wait for the heaters associated with the specified tool to reach their set temperatures
 	void GenerateTemperatureReport(StringRef& reply) const;				// Store a standard-format temperature report in reply
 	OutputBuffer *GenerateJsonStatusResponse(int type, int seq, ResponseSource source) const;	// Generate a M408 response
@@ -280,7 +284,7 @@ private:
 	GCodeResult RetractFilament(GCodeBuffer& gb, bool retract);			// Retract or un-retract filaments
 	GCodeResult LoadFilament(GCodeBuffer& gb, StringRef& reply);		// Load the specified filament into a tool
 	GCodeResult UnloadFilament(GCodeBuffer& gb, StringRef& reply);		 // Unload the current filament from a tool
-	bool ChangeMicrostepping(size_t drive, int microsteps, int mode) const;	// Change microstepping on the specified drive
+	bool ChangeMicrostepping(size_t drive, unsigned int microsteps, int mode) const;	// Change microstepping on the specified drive
 	void ListTriggers(StringRef reply, TriggerInputsBitmap mask);		// Append a list of trigger inputs to a message
 	void CheckTriggers();												// Check for and execute triggers
 	void CheckFilament();												// Check for and respond to filament errors
@@ -297,12 +301,15 @@ private:
 	void SetMappedFanSpeed();											// Set the speeds of fans mapped for the current tool
 	void SaveFanSpeeds();												// Save the speeds of all fans
 
-	bool DefineGrid(GCodeBuffer& gb, StringRef &reply);					// Define the probing grid, returning true if error
+	GCodeResult SetOrReportZProbe(GCodeBuffer& gb, StringRef &reply);	// Handle M558
+	GCodeResult DefineGrid(GCodeBuffer& gb, StringRef &reply);			// Define the probing grid, returning true if error
 	bool LoadHeightMap(GCodeBuffer& gb, StringRef& reply) const;		// Load the height map from file
 	bool SaveHeightMap(GCodeBuffer& gb, StringRef& reply) const;		// Save the height map to file
 	GCodeResult ProbeGrid(GCodeBuffer& gb, StringRef& reply);			// Start probing the grid, returning true if we didn't because of an error
+	GCodeResult CheckOrConfigureTrigger(GCodeBuffer& gb, StringRef& reply, int code);	// Handle M581 and M582
+	GCodeResult UpdateFirmware(GCodeBuffer& gb, StringRef &reply);		// Handle M997
 
-	bool WriteConfigOverrideFile(StringRef& reply, const char *fileName) const; // Write the config-override file
+	bool WriteConfigOverrideFile(GCodeBuffer& gb, StringRef& reply, const char *fileName) const; // Write the config-override file
 	void CopyConfigFinalValues(GCodeBuffer& gb);						// Copy the feed rate etc. from the daemon to the input channels
 
 	void ClearBabyStepping() { currentBabyStepZOffset = 0.0; }
@@ -384,7 +391,6 @@ private:
 	float virtualExtruderPosition;				// Virtual extruder position of the last move fed into the Move class
 	float rawExtruderTotalByDrive[MaxExtruders]; // Extrusion amount in the last G1 command with an E parameter when in absolute extrusion mode
 	float rawExtruderTotal;						// Total extrusion amount fed to Move class since starting print, before applying extrusion factor, summed over all drives
-	float record[DRIVES];						// Temporary store for move positions
 	float distanceScale;						// MM or inches
 	float arcSegmentLength;						// Length of segments that we split arc moves into
 
@@ -498,7 +504,7 @@ private:
 #endif
 
 	static constexpr const float MinServoPulseWidth = 544.0, MaxServoPulseWidth = 2400.0;
-	static const uint16_t ServoRefreshFrequency = 50;
+	static constexpr uint16_t ServoRefreshFrequency = 50;
 };
 
 //*****************************************************************************************************

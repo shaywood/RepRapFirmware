@@ -28,6 +28,7 @@ enum class KinematicsType : uint8_t
 	coreXYU,
 	hangprinter,
 	polar,
+	coreXYUV,
 
 	unknown				// this one must be last!
 };
@@ -185,7 +186,7 @@ protected:
 	float segmentsPerSecond;				// if we are using segmentation, the target number of segments/second
 	float minSegmentLength;					// if we are using segmentation, the minimum segment size
 
-	static const char *HomeAllFileName;
+	static const char * const HomeAllFileName;
 	static const char * const StandardHomingFileNames[];
 
 private:

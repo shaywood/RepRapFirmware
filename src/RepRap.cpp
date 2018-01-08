@@ -1,9 +1,9 @@
 #include "RepRap.h"
 
-#include "Network.h"
 #include "Movement/Move.h"
 #include "GCodes/GCodes.h"
 #include "Heating/Heat.h"
+#include "Network.h"
 #include "Platform.h"
 #include "Scanner.h"
 #include "PrintMonitor.h"
@@ -56,7 +56,8 @@ extern "C" void hsmciIdle()
 
 RepRap::RepRap() : toolList(nullptr), currentTool(nullptr), lastWarningMillis(0), activeExtruders(0),
 	activeToolHeaters(0), ticksInSpinState(0), spinningModule(noModule), debug(0), stopped(false),
-	active(false), resetting(false), processingConfig(true), beepFrequency(0), beepDuration(0)
+	active(false), resetting(false), processingConfig(true), beepFrequency(0), beepDuration(0),
+	displayMessageBox(false), boxSeq(0)
 {
 	OutputBuffer::Init();
 	platform = new Platform();
@@ -80,7 +81,6 @@ RepRap::RepRap() : toolList(nullptr), currentTool(nullptr), lastWarningMillis(0)
 	SetPassword(DEFAULT_PASSWORD);
 	SetName(DEFAULT_NAME);
 	message[0] = 0;
-	displayMessageBox = false;
 }
 
 void RepRap::Init()
@@ -437,12 +437,15 @@ void RepRap::PrintTool(int toolNumber, StringRef& reply) const
 	}
 }
 
-void RepRap::StandbyTool(int toolNumber)
+void RepRap::StandbyTool(int toolNumber, bool simulating)
 {
 	Tool* const tool = GetTool(toolNumber);
 	if (tool != nullptr)
 	{
-		tool->Standby();
+		if (!simulating)
+		{
+			tool->Standby();
+		}
   		if (currentTool == tool)
 		{
 			currentTool = nullptr;
@@ -531,11 +534,11 @@ void RepRap::Tick()
 		if (ticksInSpinState >= MaxTicksInSpinState)	// if we stall for 20 seconds, save diagnostic data and reset
 		{
 			resetting = true;
-			for(size_t i = 0; i < Heaters; i++)
+			for (size_t i = 0; i < Heaters; i++)
 			{
 				platform->SetHeater(i, 0.0);
 			}
-			for(size_t i = 0; i < DRIVES; i++)
+			for (size_t i = 0; i < DRIVES; i++)
 			{
 				platform->DisableDrive(i);
 				// We can't set motor currents to 0 here because that requires interrupts to be working, and we are in an ISR
@@ -573,7 +576,7 @@ OutputBuffer *RepRap::GetStatusResponse(uint8_t type, ResponseSource source)
 	response->printf("{\"status\":\"%c\",\"coords\":{", ch);
 
 	// Coordinates
-	const size_t numAxes = gCodes->GetVisibleAxes();
+	const size_t numVisibleAxes = gCodes->GetVisibleAxes();
 	{
 		float liveCoordinates[DRIVES];
 #if SUPPORT_ROLAND
@@ -589,7 +592,7 @@ OutputBuffer *RepRap::GetStatusResponse(uint8_t type, ResponseSource source)
 
 		if (currentTool != nullptr)
 		{
-			for (size_t i = 0; i < numAxes; ++i)
+			for (size_t i = 0; i < numVisibleAxes; ++i)
 			{
 				liveCoordinates[i] += currentTool->GetOffset(i);
 			}
@@ -598,7 +601,7 @@ OutputBuffer *RepRap::GetStatusResponse(uint8_t type, ResponseSource source)
 		// Homed axes
 		response->cat("\"axesHomed\":");
 		ch = '[';
-		for (size_t axis = 0; axis < numAxes; ++axis)
+		for (size_t axis = 0; axis < numVisibleAxes; ++axis)
 		{
 			response->catf("%c%d", ch, (gCodes->GetAxisIsHomed(axis)) ? 1 : 0);
 			ch = ',';
@@ -609,7 +612,7 @@ OutputBuffer *RepRap::GetStatusResponse(uint8_t type, ResponseSource source)
 		ch = '[';
 		for (size_t extruder = 0; extruder < GetExtrudersInUse(); extruder++)
 		{
-			response->catf("%c%.1f", ch, (double)liveCoordinates[numAxes + extruder]);
+			response->catf("%c%.1f", ch, (double)liveCoordinates[gCodes->GetTotalAxes() + extruder]);
 			ch = ',';
 		}
 		if (ch == '[')
@@ -621,7 +624,7 @@ OutputBuffer *RepRap::GetStatusResponse(uint8_t type, ResponseSource source)
 		// TODO ideally we would report "unknown" or similar for axis positions that are not known because we haven't homed them, but that requires changes to both DWC and PanelDue.
 		response->cat("],\"xyz\":");
 		ch = '[';
-		for (size_t axis = 0; axis < numAxes; axis++)
+		for (size_t axis = 0; axis < numVisibleAxes; axis++)
 		{
 			// Coordinates may be NaNs, for example when delta or SCARA homing fails. Replace any NaNs or infinities by 9999.9 to prevent JSON parsing errors.
 			const float coord = liveCoordinates[axis];
@@ -679,7 +682,7 @@ OutputBuffer *RepRap::GetStatusResponse(uint8_t type, ResponseSource source)
 				response->EncodeString(boxMessage, ARRAY_SIZE(boxMessage), false);
 				response->cat(",\"title\":");
 				response->EncodeString(boxTitle, ARRAY_SIZE(boxTitle), false);
-				response->catf(",\"mode\":%d,\"timeout\":%.1f,\"controls\":%" PRIu32 "}", boxMode, (double)timeLeft, boxControls);
+				response->catf(",\"mode\":%d,\"seq\":%" PRIu32 ",\"timeout\":%.1f,\"controls\":%" PRIu32 "}", boxMode, boxSeq, (double)timeLeft, boxControls);
 			}
 			response->cat("}");
 		}
@@ -930,7 +933,7 @@ OutputBuffer *RepRap::GetStatusResponse(uint8_t type, ResponseSource source)
 		response->catf(",\"endstops\":%" PRIu32, endstops);
 
 		// Firmware name, machine geometry and number of axes
-		response->catf(",\"firmwareName\":\"%s\",\"geometry\":\"%s\",\"axes\":%u,\"axisNames\":\"%s\"", FIRMWARE_NAME, move->GetGeometryString(), numAxes, gCodes->GetAxisLetters());
+		response->catf(",\"firmwareName\":\"%s\",\"geometry\":\"%s\",\"axes\":%u,\"axisNames\":\"%s\"", FIRMWARE_NAME, move->GetGeometryString(), numVisibleAxes, gCodes->GetAxisLetters());
 
 		// Total and mounted volumes
 		size_t mountedCards = 0;
@@ -1030,6 +1033,9 @@ OutputBuffer *RepRap::GetStatusResponse(uint8_t type, ResponseSource source)
 				}
 				response->cat("]]");
 
+				// Fan mapping
+				response->catf(",\"fans\":%lu", tool->GetFanMapping());
+
 				// Filament (if any)
 				if (tool->GetFilament() != nullptr)
 				{
@@ -1038,8 +1044,15 @@ OutputBuffer *RepRap::GetStatusResponse(uint8_t type, ResponseSource source)
 					response->EncodeString(filamentName, strlen(filamentName), false);
 				}
 
-				// Do we have any more tools?
-				response->cat((tool->Next() != nullptr) ? "}," : "}");
+				// Offsets
+				response->cat(",\"offsets\":[");
+				for (size_t i = 0; i < numVisibleAxes; i++)
+				{
+					response->catf((i == 0) ? "%.2f" : ",%.2f", (double)tool->GetOffset(i));
+				}
+
+  				// Do we have any more tools?
+				response->cat((tool->Next() != nullptr) ? "]}," : "]}");
 			}
 			response->cat("]");
 		}
@@ -1172,7 +1185,7 @@ OutputBuffer *RepRap::GetConfigResponse()
 	ch = '[';
 	for (size_t drive = 0; drive < DRIVES; drive++)
 	{
-		response->catf("%c%.2f", ch, (double)(platform->GetMotorCurrent(drive, false)));
+		response->catf("%c%.2f", ch, (double)(platform->GetMotorCurrent(drive, 906)));
 		ch = ',';
 	}
 
@@ -1380,7 +1393,8 @@ OutputBuffer *RepRap::GetLegacyStatusResponse(uint8_t type, int seq)
 
 	if (displayMessageBox)
 	{
-		response->catf(",\"msgBox.mode\":%d,\"msgBox.timeout\":%.1f,\"msgBox.controls\":%" PRIu32 "", boxMode, (double)timeLeft, boxControls);
+		response->catf(",\"msgBox.mode\":%d,\"msgBox.seq\":%" PRIu32 ",\"msgBox.timeout\":%.1f,\"msgBox.controls\":%" PRIu32 "",
+						boxMode, boxSeq, (double)timeLeft, boxControls);
 		response->cat(",\"msgBox.msg\":");
 		response->EncodeString(boxMessage, ARRAY_SIZE(boxMessage), false);
 		response->cat(",\"msgBox.title\":");
@@ -1607,6 +1621,7 @@ void RepRap::SetAlert(const char *msg, const char *title, int mode, float timeou
 	boxTimeout = round(max<float>(timeout, 0.0) * 1000.0);
 	boxControls = controls;
 	displayMessageBox = true;
+	++boxSeq;
 }
 
 // Clear pending message box

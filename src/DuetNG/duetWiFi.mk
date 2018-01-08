@@ -20,10 +20,10 @@ INCLUDES := -I"$(DUET_BOARD_PATH)/cores/arduino" -I"$(DUET_BOARD_PATH)/asf" -I"$
 INCLUDES += -I"$(DUET_LIBRARY_PATH)/Flash" -I"$(DUET_LIBRARY_PATH)/RTCDue" -I"$(DUET_LIBRARY_PATH)/SharedSpi" -I"$(DUET_LIBRARY_PATH)/Storage" -I"$(DUET_LIBRARY_PATH)/Wire"
 
 # Set board options
-INCLUDES += -I"$(PWD)" -I"$(PWD)/DuetNG" -I"$(PWD)/DuetNG/DuetWiFi"
+INCLUDES += -I"$(PWD)" -I"$(PWD)/DuetNG" -I"$(PWD)/DuetNG/DuetWiFi" -I"$(PWD)/Network2" -I"$(PWD)/Network2/ESP8266" -I"$(PWD)/DuetNG/DuetWiFi"
 
 # Get source files
-VPATH := $(PWD) $(PWD)/DuetNG $(PWD)/FilamentSensors $(PWD)/DuetNG/DuetWiFi $(PWD)/GCodes $(PWD)/Heating $(PWD)/Heating/Sensors $(PWD)/Movement $(PWD)/Movement/BedProbing $(PWD)/Movement/Kinematics $(PWD)/Storage $(PWD)/Tools
+VPATH := $(PWD) $(PWD)/DuetNG $(PWD)/FilamentSensors $(PWD)/DuetNG/DuetWiFi $(PWD)/GCodes $(PWD)/Heating $(PWD)/Heating/Sensors $(PWD)/Movement $(PWD)/Movement/BedProbing $(PWD)/Movement/Kinematics $(PWD)/Network2 $(PWD)/Network2/ESP8266 $(PWD)/Storage $(PWD)/Tools
 VPATH += $(PWD)/Libraries/Fatfs $(PWD)/Libraries/General $(PWD)/Libraries/Math $(PWD)/Libraries/MCP4461 $(PWD)/Libraries/TemperatureSensor $(PWD)/Libraries/sha1
 
 C_SOURCES += $(foreach dir,$(VPATH),$(wildcard $(dir)/*.c)) $(wildcard $(PWD)/*.c)
